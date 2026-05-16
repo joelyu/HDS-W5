@@ -1,0 +1,22 @@
+name: classileukotion
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scikit-learn
+  - matplotlib
+  - seaborn
+  - pillow
+  - pip
+  - pip:
+    - torch>=2.1
+    - torchvision
+    - xgboost>=2.0
+    - optuna>=3.6
+    - huggingface_hub
+    - umap-learn
+    - shap
+    - pytorch-grad-cam
+    - timm
