@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
 """Train XGBoost classifiers on frozen backbone features with Optuna HP tuning.
 
-For each backbone's features (from 02_feature_extraction.py), runs Optuna with
-both TPE and GP samplers to find optimal XGBoost hyperparameters. Then evaluates
-the best configuration across multiple seeds for stability.
+For each backbone's features (from 02_feature_extraction.py), runs Optuna TPE
+to find optimal XGBoost hyperparameters. Then evaluates the best configuration
+across multiple seeds for stability.
+
+GP sampler is available via --include-gp but disabled by default: GP surrogate
+fitting (O(n³) per trial) dominates walltime when evaluations are cheap, making
+it slower in wall-clock time despite needing fewer trials.
 
 Outputs saved to results/:
-    xgboost_results.json          — all metrics, best params, per-seed results
-    optuna_history_{backbone}_{sampler}.png  — convergence plots
+    xgboost_results.json              — all metrics, best params, per-seed results
+    optuna_history_{backbone}.png     — convergence plots
     confusion_matrix_{backbone}.png
 
 Usage:
     python scripts/03_xgboost_training.py
     python scripts/03_xgboost_training.py --backbone dinobloom_s   # single backbone
     python scripts/03_xgboost_training.py --n-trials 50            # fewer trials
-    python scripts/03_xgboost_training.py --skip-gp                # TPE only (faster)
+    python scripts/03_xgboost_training.py --include-gp             # also run GP sampler
 """
 from __future__ import annotations
 
@@ -235,7 +239,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--n-trials", type=int, default=100, help="Max Optuna trials per sampler.")
     parser.add_argument("--patience", type=int, default=20, help="Early stopping patience (trials).")
-    parser.add_argument("--skip-gp", action="store_true", help="Skip GP sampler (faster).")
+    parser.add_argument("--include-gp", action="store_true", help="Also run GP sampler (slow — O(n³) surrogate fitting).")
     return parser.parse_args()
 
 
@@ -333,8 +337,8 @@ def main() -> int:
         studies["TPE"] = tpe_study
         print(f"  TPE best: {tpe_study.best_value:.4f} in {len(tpe_study.trials)} trials")
 
-        # GP sampler
-        if not args.skip_gp:
+        # GP sampler (optional — slow due to O(n³) surrogate fitting)
+        if args.include_gp:
             print("  Running GP sampler...")
             gp_study = run_study(
                 "GP",
