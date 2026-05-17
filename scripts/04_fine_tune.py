@@ -283,7 +283,7 @@ def train_model(
         scheduler.step()
         val_f1, _, _ = evaluate(model, val_loader, device)
 
-        history.append({"epoch": epoch, "train_loss": train_loss, "val_f1": val_f1})
+        history.append({"epoch": epoch, "train_loss": train_loss, "val_f1": float(val_f1)})
 
         if val_f1 > best_f1:
             best_f1 = val_f1
