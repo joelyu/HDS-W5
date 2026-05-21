@@ -405,8 +405,13 @@ def main() -> int:
             "test_results": eval_results,
         }
 
-    # ── Save all results ────────────────────────────────────────────────
+    # ── Save all results (merge with existing if running per-backbone) ──
     out_path = results_dir / "xgboost_results.json"
+    if out_path.exists():
+        with open(out_path) as f:
+            existing = json.load(f)
+        existing.update(all_results)
+        all_results = existing
     with open(out_path, "w") as f:
         json.dump(all_results, f, indent=2)
     print(f"\nSaved {out_path}")

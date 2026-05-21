@@ -4,13 +4,13 @@
 #SBATCH --account=TORABI-SL3-CPU
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --time=02:00:00
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=32
+#SBATCH --time=04:00:00
+#SBATCH --mem=64G
 #SBATCH --output=logs/xgboost_%j.out
 #SBATCH --error=logs/xgboost_%j.err
 
-# XGBoost HP tuning on CPU (icelake — 8 cores)
+# XGBoost HP tuning on CPU (icelake — 32 cores)
 # TPE only — GP sampler dropped (surrogate fitting dominated walltime)
 
 module purge

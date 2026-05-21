@@ -128,16 +128,8 @@ def build_model(backbone_name: str, dropout: float = 0.3) -> nn.Module:
         num_tokens = int(1 + (224 / 14) ** 2)
         model.pos_embed = nn.Parameter(torch.zeros(1, num_tokens, 384))
         model.load_state_dict(ckpt, strict=True)
-        # DINOv2 has no classifier — add one
+        # DINOv2's forward already applies self.head — replace the default Identity head
         model.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(384, NUM_CLASSES))
-        # Wrap forward to use head
-        original_forward = model.forward
-
-        def new_forward(x):
-            features = original_forward(x)
-            return model.head(features)
-
-        model.forward = new_forward
         return model
 
     raise ValueError(f"Unknown backbone: {backbone_name}")
@@ -602,8 +594,13 @@ def main() -> int:
         elif device.type == "mps":
             torch.mps.empty_cache()
 
-    # Save results
+    # Save results (merge with existing if running per-backbone)
     out_path = results_dir / "finetune_results.json"
+    if out_path.exists():
+        with open(out_path) as f:
+            existing = json.load(f)
+        existing.update(all_results)
+        all_results = existing
     with open(out_path, "w") as f:
         json.dump(all_results, f, indent=2)
     print(f"\nSaved {out_path}")
