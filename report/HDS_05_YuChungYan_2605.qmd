@@ -1,0 +1,242 @@
+---
+title: "Peripheral Blood Cell Classification with Foundation Model Features"
+author: "Chung Yan Yu (Joel)"
+date: today
+format:
+  pdf:
+    toc: false
+    number-sections: true
+    colorlinks: true
+  docx:
+    toc: false
+    number-sections: true
+bibliography: references.bib
+execute:
+  echo: false
+  warning: false
+---
+
+```{python}
+#| label: setup
+#| include: false
+
+import sys
+from pathlib import Path
+
+# Add scripts/ to path so we can import from config, etc.
+sys.path.insert(0, str(Path("../scripts").resolve()))
+
+import json
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from config import (
+    BACKBONES, BACKBONE_DISPLAY, CLASS_ORDER, CLASS_ORDER_ALPHA,
+    CLASS_LABELS, COLOURS, SPLIT_ORDER, style_axis, load_features,
+)
+
+RESULTS_DIR = Path("../results")
+```
+
+## Abstract
+
+
+## Introduction
+
+
+
+## Methods
+
+### Dataset
+
+```{python}
+#| label: fig-class-distribution
+#| fig-cap: "Class distribution across train/validation/test splits in the KU-Optofil dataset."
+
+from PIL import Image
+img = Image.open(RESULTS_DIR / "class_by_split.png")
+plt.figure(figsize=(10, 5))
+plt.imshow(img)
+plt.axis("off")
+plt.tight_layout()
+plt.show()
+```
+
+### Feature Extraction
+
+
+### Frozen-Feature Classifiers
+
+#### XGBoost
+
+```{python}
+#| label: tbl-xgboost-params
+#| tbl-cap: "Best hyperparameters found by Optuna (TPE sampler) for each backbone."
+
+xgb_results = json.load(open(RESULTS_DIR / "xgboost_results.json"))
+
+rows = []
+for bb in BACKBONES:
+    if bb not in xgb_results:
+        continue
+    params = xgb_results[bb]["best_params"]
+    rows.append({
+        "Backbone": BACKBONE_DISPLAY.get(bb, bb),
+        "n_estimators": params["n_estimators"],
+        "max_depth": params["max_depth"],
+        "learning_rate": f"{params['learning_rate']:.4f}",
+        "subsample": f"{params['subsample']:.2f}",
+        "colsample_bytree": f"{params['colsample_bytree']:.2f}",
+        "Trials": xgb_results[bb]["tpe_trials"],
+        "Val macro F1": f"{xgb_results[bb]['best_val_macro_f1']:.4f}",
+    })
+
+pd.DataFrame(rows)
+```
+
+#### Linear Probe
+
+
+### End-to-End Fine-Tuning
+
+
+## Results
+
+### Headline Comparison
+
+```{python}
+#| label: tbl-headline
+#| tbl-cap: "Test set performance across all models (mean +/- std over 5 seeds)."
+
+lp_results = json.load(open(RESULTS_DIR / "linear_probe_results.json"))
+xgb_results = json.load(open(RESULTS_DIR / "xgboost_results.json"))
+
+# Load fine-tuning results if available
+ft_path = RESULTS_DIR / "finetune_results.json"
+ft_results = json.load(open(ft_path)) if ft_path.exists() else {}
+
+rows = []
+for bb in BACKBONES:
+    for method, data in [("Linear Probe", lp_results), ("XGBoost", xgb_results), ("Fine-tuned", ft_results)]:
+        if bb not in data:
+            continue
+        tr = data[bb]["test_results"]
+        rows.append({
+            "Backbone": BACKBONE_DISPLAY.get(bb, bb),
+            "Classifier": method,
+            "Macro F1": f"{tr['macro_f1_mean']:.4f} +/- {tr['macro_f1_std']:.4f}",
+            "Weighted F1": f"{tr['weighted_f1_mean']:.4f} +/- {tr['weighted_f1_std']:.4f}",
+            "Accuracy": f"{tr['accuracy_mean']:.4f} +/- {tr['accuracy_std']:.4f}",
+            "Balanced Acc": f"{tr['balanced_accuracy_mean']:.4f} +/- {tr['balanced_accuracy_std']:.4f}",
+        })
+
+pd.DataFrame(rows)
+```
+
+### Per-Class Performance
+
+```{python}
+#| label: fig-perclass-f1
+#| fig-cap: "Per-class F1 scores for each backbone-classifier combination."
+
+# Build per-class F1 dataframe from classification reports
+rows = []
+for bb in BACKBONES:
+    for method, data in [("Linear Probe", lp_results), ("XGBoost", xgb_results), ("Fine-tuned", ft_results)]:
+        if bb not in data:
+            continue
+        report = data[bb]["test_results"]["classification_report"]
+        for cls in CLASS_ORDER_ALPHA:
+            if cls in report:
+                rows.append({
+                    "Class": CLASS_LABELS.get(cls, cls),
+                    "Backbone": BACKBONE_DISPLAY.get(bb, bb),
+                    "Classifier": method,
+                    "F1": report[cls]["f1-score"],
+                })
+
+df = pd.DataFrame(rows)
+
+if not df.empty:
+    pivot = df.pivot_table(index="Class", columns=["Backbone", "Classifier"], values="F1")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    pivot.plot(kind="barh", ax=ax)
+    style_axis(ax)
+    ax.set_xlabel("F1 Score")
+    ax.set_title("Per-Class F1 by Backbone and Classifier")
+    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
+    plt.tight_layout()
+    plt.show()
+```
+
+### Confusion Matrices
+
+```{python}
+#| label: fig-confusion-matrices
+#| fig-cap: "Confusion matrices for the best-performing configuration per backbone (XGBoost, median seed)."
+
+from matplotlib.colors import LogNorm
+
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+for ax, bb in zip(axes, BACKBONES):
+    if bb not in xgb_results:
+        continue
+    cm = np.array(xgb_results[bb]["test_results"]["confusion_matrix"])
+    # Normalise by row (true class)
+    cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+
+    im = ax.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
+    ax.set_title(BACKBONE_DISPLAY.get(bb, bb))
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("True")
+
+    labels = [CLASS_LABELS.get(c, c) for c in CLASS_ORDER_ALPHA]
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(labels, rotation=90, fontsize=7)
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels, fontsize=7)
+
+fig.colorbar(im, ax=axes, shrink=0.6, label="Recall (row-normalised)")
+plt.tight_layout()
+plt.show()
+```
+
+### Optuna Convergence
+
+```{python}
+#| label: fig-optuna
+#| fig-cap: "Optuna TPE convergence plots for XGBoost HP tuning."
+
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+for ax, bb in zip(axes, BACKBONES):
+    img_path = RESULTS_DIR / f"optuna_history_{bb}.png"
+    if img_path.exists():
+        img = Image.open(img_path)
+        ax.imshow(img)
+    ax.set_title(BACKBONE_DISPLAY.get(bb, bb))
+    ax.axis("off")
+
+plt.tight_layout()
+plt.show()
+```
+
+### Training Curves (Fine-Tuning)
+
+```{python}
+#| label: fig-training-curves
+#| fig-cap: "Training loss and validation macro F1 over epochs for the best Optuna trial per backbone."
+
+# TODO: extract training history from fine-tuning results once available
+# ft_results[backbone]["training_history"] would contain per-epoch data
+```
+
+## Discussion
+
+
+## References
+
+::: {#refs}
+:::
