@@ -44,12 +44,12 @@ def load_dinobloom_s() -> torch.nn.Module:
     return model
 
 
-def cellness_map(model: torch.nn.Module, img_tensor: torch.Tensor, device: str) -> np.ndarray:
-    """Return an oriented 16x16 float16 cellness map (high = central cell)."""
-    with torch.no_grad():
-        toks = model.get_intermediate_layers(img_tensor.to(device), n=1)[0]  # (1, N, 384)
-    n = toks.shape[1]
-    patch = (toks[0, 1:, :] if n == GRID * GRID + 1 else toks[0, :, :]).cpu().numpy()
+def _pca_cellness(patch: np.ndarray) -> np.ndarray:
+    """patch: (256, 384) patch tokens -> oriented 16x16 float16 cellness map.
+
+    First PCA component across the patches is the foreground/background axis;
+    polarity is flipped so the central patches (the cell) are the high end.
+    """
     pc1 = PCA(n_components=1).fit_transform(patch)[:, 0].reshape(GRID, GRID)
     center = pc1[GRID // 2 - 2:GRID // 2 + 2, GRID // 2 - 2:GRID // 2 + 2].mean()
     border = np.concatenate([pc1[0, :], pc1[-1, :], pc1[:, 0], pc1[:, -1]]).mean()
@@ -58,12 +58,28 @@ def cellness_map(model: torch.nn.Module, img_tensor: torch.Tensor, device: str) 
     return pc1.astype(np.float16)
 
 
+def cellness_maps(model: torch.nn.Module, batch: torch.Tensor, device: str) -> list[np.ndarray]:
+    """batch: (B,3,224,224) -> list of B oriented 16x16 float16 cellness maps.
+
+    One batched forward pass (LayerNorm makes per-image patch tokens identical
+    to single-image inference), then per-image PCA. Equivalent to running each
+    image alone, just far faster on MPS/GPU.
+    """
+    with torch.no_grad():
+        toks = model.get_intermediate_layers(batch.to(device), n=1)[0]  # (B, N, 384)
+    if toks.shape[1] == GRID * GRID + 1:
+        toks = toks[:, 1:, :]  # drop CLS token
+    patches = toks.cpu().numpy()  # (B, 256, 384)
+    return [_pca_cellness(patches[b]) for b in range(patches.shape[0])]
+
+
 def parse_args() -> argparse.Namespace:
     base = Path(__file__).resolve().parent.parent
     p = argparse.ArgumentParser(description="Precompute DinoBloom cellness maps.")
     p.add_argument("--data-dir", type=Path, default=base / "data" / "raw")
     p.add_argument("--results-dir", type=Path, default=base / "results")
     p.add_argument("--limit", type=int, default=None, help="First N images per split (smoke test).")
+    p.add_argument("--batch-size", type=int, default=32, help="Images per forward pass.")
     p.add_argument("--device", default=None, help="mps|cpu|cuda (auto if omitted).")
     return p.parse_args()
 
@@ -99,16 +115,18 @@ def main() -> int:
             sdf = sdf.head(args.limit)
         n = len(sdf)
         maps, names = [], []
-        print(f"\n{split}: {n} images")
-        for i, row in sdf.iterrows():
-            original_split = row["path"].split("/")[0]
-            img_path = image_root / original_split / FOLDER_NAME_MAP[row["cell_type"]] / row["image_name"]
-            img = Image.open(img_path).convert("RGB")
-            tensor = tf(img).unsqueeze(0)
-            maps.append(cellness_map(model, tensor, device))
-            names.append(row["image_name"])
-            if (i + 1) % 500 == 0 or (i + 1) == n:
-                print(f"\r  {i + 1}/{n} ({time.time() - t0:.0f}s)", end="", flush=True)
+        print(f"\n{split}: {n} images (batch {args.batch_size})")
+        for start in range(0, n, args.batch_size):
+            chunk = sdf.iloc[start:start + args.batch_size]
+            tensors = []
+            for _, row in chunk.iterrows():
+                original_split = row["path"].split("/")[0]
+                img_path = image_root / original_split / FOLDER_NAME_MAP[row["cell_type"]] / row["image_name"]
+                tensors.append(tf(Image.open(img_path).convert("RGB")))
+                names.append(row["image_name"])
+            maps.extend(cellness_maps(model, torch.stack(tensors), device))
+            done = min(start + args.batch_size, n)
+            print(f"\r  {done}/{n} ({time.time() - t0:.0f}s)", end="", flush=True)
         print()
         out[f"{split}_scores"] = np.stack(maps).astype(np.float16)
         out[f"{split}_image_name"] = np.array(names)
