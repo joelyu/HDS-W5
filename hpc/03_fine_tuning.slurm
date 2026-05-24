@@ -12,7 +12,15 @@
 #SBATCH --error=logs/finetune_%j.err
 
 # Fine-tuning on A100 (ampere partition)
-# 3 backbones x 30 Optuna trials x up to 50 epochs (pruning kills most early)
+# Submit per-backbone for parallel execution + fault isolation:
+#   sbatch hpc/03_fine_tuning.slurm resnet50
+#   sbatch hpc/03_fine_tuning.slurm efficientnet_b0
+#   sbatch hpc/03_fine_tuning.slurm dinobloom_s
+#
+# Debug mode:
+#   sbatch -q INTR --time=01:00:00 hpc/03_fine_tuning.slurm --debug
+
+BACKBONE="${1:?Usage: sbatch hpc/03_fine_tuning.slurm <backbone|--debug>}"
 
 module purge
 module load rhel8/default-amp
@@ -24,15 +32,14 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 cd "$HOME/rds/hpc-work/w5/HDS_W5_cyy36"
 mkdir -p logs
 
-echo "=== Fine-Tuning (Optuna + multi-seed) ==="
+echo "=== Fine-Tuning: ${BACKBONE} ==="
 echo "Node: $(hostname)"
 echo "GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
 echo "Start: $(date)"
 echo ""
 
-# Debug mode: sbatch -q INTR --time=01:00:00 hpc/03_fine_tuning.slurm --debug
-if [[ "$1" == "--debug" ]]; then
-    echo "[DEBUG MODE] 1 backbone, 2 trials, 3 epochs"
+if [[ "$BACKBONE" == "--debug" ]]; then
+    echo "[DEBUG MODE] resnet50, 2 trials, 3 epochs"
     python -u scripts/04_fine_tune.py \
         --data-dir data/raw \
         --results-dir results \
@@ -46,6 +53,7 @@ else
     python -u scripts/04_fine_tune.py \
         --data-dir data/raw \
         --results-dir results \
+        --backbone "$BACKBONE" \
         --n-trials 30 \
         --n-epochs 50 \
         --patience 10 \

@@ -12,6 +12,10 @@
 
 # XGBoost HP tuning on CPU (icelake — 32 cores)
 # TPE only — GP sampler dropped (surrogate fitting dominated walltime)
+#
+# Usage:
+#   sbatch hpc/02_xgboost_training.slurm              # all backbones
+#   sbatch hpc/02_xgboost_training.slurm vit_s16       # single backbone
 
 module purge
 module load rhel8/default-icl
@@ -22,7 +26,12 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 cd "$HOME/rds/hpc-work/w5/HDS_W5_cyy36"
 mkdir -p logs
 
-echo "=== XGBoost Training (TPE) ==="
+BACKBONE_ARG=""
+if [[ -n "$1" ]]; then
+    BACKBONE_ARG="--backbone $1"
+fi
+
+echo "=== XGBoost Training (TPE) ${1:-all backbones} ==="
 echo "Node: $(hostname)"
 echo "CPUs: $(nproc)"
 echo "Start: $(date)"
@@ -31,7 +40,8 @@ echo ""
 python -u scripts/03_xgboost_training.py \
     --results-dir results \
     --n-trials 100 \
-    --patience 20
+    --patience 20 \
+    $BACKBONE_ARG
 
 echo ""
 echo "Done: $(date)"
