@@ -296,13 +296,13 @@ def evaluate_multiseed(
 
     return {
         "macro_f1_mean": float(np.mean(macro_f1s)),
-        "macro_f1_std": float(np.std(macro_f1s)),
+        "macro_f1_std": float(np.std(macro_f1s, ddof=1)),
         "weighted_f1_mean": float(np.mean(weighted_f1s)),
-        "weighted_f1_std": float(np.std(weighted_f1s)),
+        "weighted_f1_std": float(np.std(weighted_f1s, ddof=1)),
         "accuracy_mean": float(np.mean(accuracies)),
-        "accuracy_std": float(np.std(accuracies)),
+        "accuracy_std": float(np.std(accuracies, ddof=1)),
         "balanced_accuracy_mean": float(np.mean(balanced_accs)),
-        "balanced_accuracy_std": float(np.std(balanced_accs)),
+        "balanced_accuracy_std": float(np.std(balanced_accs, ddof=1)),
         "per_seed": all_metrics,
         "classification_report": all_metrics[median_idx]["classification_report"],
         "confusion_matrix": all_metrics[median_idx]["confusion_matrix"],
