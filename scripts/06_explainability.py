@@ -162,9 +162,19 @@ def plot_shap(
     results_dir: Path,
     max_display: int = 20,
     shap_sample: int = 1000,
+    feature_names: list[str] | None = None,
 ) -> None:
-    """SHAP analysis for an XGBoost classifier."""
+    """SHAP analysis for an XGBoost classifier.
+
+    feature_names: real names (handcrafted backbones) for axis labels; when
+    None (deep backbones) labels fall back to abstract "dim i".
+    """
     import shap
+
+    def _label(i: int) -> str:
+        return feature_names[i] if feature_names is not None else f"dim {i}"
+
+    unit = "features" if feature_names is not None else "embedding dimensions"
 
     print(f"  Computing SHAP values for {backbone}...")
 
@@ -193,9 +203,9 @@ def plot_shap(
     top_idx = np.argsort(mean_abs_shap)[-max_display:]
     ax.barh(range(len(top_idx)), mean_abs_shap[top_idx], color=COLOURS["secondary"])
     ax.set_yticks(range(len(top_idx)))
-    ax.set_yticklabels([f"dim {i}" for i in top_idx], fontsize=8)
+    ax.set_yticklabels([_label(i) for i in top_idx], fontsize=8)
     ax.set_xlabel("Mean |SHAP value|")
-    ax.set_title(f"Top {max_display} embedding dimensions — {backbone}")
+    ax.set_title(f"Top {max_display} {unit} — {backbone}")
     fig.tight_layout()
     fig.savefig(results_dir / f"shap_bar_{backbone}.png", dpi=150)
     plt.close(fig)
@@ -219,7 +229,7 @@ def plot_shap(
             top = np.argsort(sv)[-n_top:]
             ax.barh(range(len(top)), sv[top], color=COLOURS["secondary"])
             ax.set_yticks(range(len(top)))
-            ax.set_yticklabels([f"dim {i}" for i in top], fontsize=7)
+            ax.set_yticklabels([_label(i) for i in top], fontsize=7)
             ax.set_xlabel("Mean |SHAP|")
             ax.set_title(CLASS_LABELS.get(le.classes_[cls_idx], le.classes_[cls_idx]),
                          fontsize=10)
@@ -433,9 +443,11 @@ def main() -> int:
             print(f"  Training XGBoost for {backbone}...")
             model = train_best_xgboost(best_params, X_trainval, y_trainval)
 
+            fnames = feat.get("feature_names")
             plot_shap(
                 model, feat["test_X"], feat["label_encoder"],
                 backbone, results_dir, shap_sample=args.shap_sample,
+                feature_names=list(fnames) if fnames is not None else None,
             )
 
         print()

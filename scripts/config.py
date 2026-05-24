@@ -52,9 +52,19 @@ SPLIT_ORDER = ["train", "validation", "test"]
 
 NUM_CLASSES = 13
 
-BACKBONES = ["resnet50", "efficientnet_b0", "dinobloom_s"]
+BACKBONES = ["resnet50", "efficientnet_b0", "dinobloom_s", "vit_s16", "dinobloom_s_multilevel", "handcrafted", "handcrafted_dino"]
 
 SEEDS = [42, 123, 456, 789, 1024]
+
+# The 51 Tavakoli (2021) feature names, generated to match the keys produced
+# by 02b's extract_cell_features. Used to subset the extended feature matrix
+# back to the Tavakoli baseline (positional slicing fails — names are sorted).
+_TAVAKOLI_CHANNELS = ["R", "G", "B", "H", "S", "V", "L", "A", "Blab", "Y", "Cr", "Cb"]
+TAVAKOLI_51 = ["solidity", "convexity", "circularity"] + [
+    f"{ratio}_{ch}"
+    for ch in _TAVAKOLI_CHANNELS
+    for ratio in ("ncl_cvx_mean", "ncl_cvx_std", "roc_cvx_mean", "roc_cvx_std")
+]
 
 # Okabe-Ito-adjacent colorblind-safe palette — red/blue theme for blood cells.
 COLOURS = {
@@ -76,6 +86,10 @@ BACKBONE_DISPLAY = {
     "resnet50": "ResNet-50",
     "efficientnet_b0": "EfficientNet-B0",
     "dinobloom_s": "DinoBloom-S",
+    "vit_s16": "ViT-S/16",
+    "dinobloom_s_multilevel": "DinoBloom-S (multi-level)",
+    "handcrafted": "Handcrafted",
+    "handcrafted_dino": "Handcrafted (DinoBloom seg)",
 }
 
 # Alphabetical class order — matches LabelEncoder / sklearn output ordering
@@ -98,6 +112,62 @@ CLASS_COLOURS = [
     "#DDCC77",  # platelet_cluster — sand
 ]
 CLASS_COLOUR_MAP = dict(zip(CLASS_ORDER, CLASS_COLOURS))
+
+
+# ── 5-class WBC differential ──────────────────────────────────────────────
+
+# Merge 13-class KU-Optofil → standard 5-class WBC differential.
+# Classes not in this mapping are dropped (no clean mapping to standard 5).
+FIVE_CLASS_MAP = {
+    "segmented_neutrophil": "neutrophil",
+    "band_neutrophil": "neutrophil",
+    "eosinophil": "eosinophil",
+    "basophil": "basophil",
+    "lymphocyte": "lymphocyte",
+    "reactive_lymphocyte": "lymphocyte",
+    "monocyte": "monocyte",
+}
+
+FIVE_CLASS_ORDER = sorted(set(FIVE_CLASS_MAP.values()))
+
+FIVE_CLASS_LABELS = {
+    "basophil": "Basophil",
+    "eosinophil": "Eosinophil",
+    "lymphocyte": "Lymphocyte",
+    "monocyte": "Monocyte",
+    "neutrophil": "Neutrophil",
+}
+
+
+def reduce_to_5class(data: dict) -> dict:
+    """Reduce a 13-class loaded feature dict to 5-class WBC differential.
+
+    Merges band+segmented→neutrophil, lymphocyte+reactive→lymphocyte.
+    Drops blast, erythroblast, metamyelocyte, myelocyte, giant_platelet,
+    platelet_cluster (no clean mapping to standard 5).
+    """
+    le5 = LabelEncoder()
+    le5.fit(FIVE_CLASS_ORDER)
+
+    out = {}
+    for split in ("train", "val", "test"):
+        X = data[f"{split}_X"]
+        y_str = data[f"{split}_y_str"]
+
+        # Keep only samples whose 13-class label maps to a 5-class label
+        keep = np.array([lbl in FIVE_CLASS_MAP for lbl in y_str])
+        X = X[keep]
+        y_str_kept = y_str[keep]
+
+        # Remap to 5-class names
+        y_mapped = np.array([FIVE_CLASS_MAP[lbl] for lbl in y_str_kept])
+
+        out[f"{split}_X"] = X
+        out[f"{split}_y"] = le5.transform(y_mapped)
+        out[f"{split}_y_str"] = y_mapped
+
+    out["label_encoder"] = le5
+    return out
 
 
 # ── Acevedo external validation ────────────────────────────────────────────
@@ -145,9 +215,11 @@ def load_features(results_dir: Path, backbone: str) -> dict:
         "train_y_str": data["train_y"],
         "val_X": data["validation_X"],
         "val_y": le.transform(data["validation_y"]),
+        "val_y_str": data["validation_y"],
         "test_X": data["test_X"],
         "test_y": le.transform(data["test_y"]),
         "test_y_str": data["test_y"],
+        "feature_names": data["feature_names"] if "feature_names" in data.files else None,
         "label_encoder": le,
     }
 

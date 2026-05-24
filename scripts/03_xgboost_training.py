@@ -39,9 +39,13 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
 )
+from scipy import stats
 from sklearn.utils.class_weight import compute_sample_weight
 
-from config import BACKBONES, CLASS_LABELS, COLOURS, SEEDS, load_features
+from config import (
+    BACKBONES, CLASS_LABELS, COLOURS, FIVE_CLASS_LABELS, SEEDS, TAVAKOLI_51,
+    load_features, reduce_to_5class,
+)
 
 # Suppress Optuna's trial-level logs (we print our own progress)
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -132,15 +136,28 @@ def evaluate_with_seeds(
     accuracies = [m["accuracy"] for m in all_metrics]
     balanced_accs = [m["balanced_accuracy"] for m in all_metrics]
 
+    # 95% confidence interval: t * (std / sqrt(n))
+    n = len(seeds)
+    t_crit = float(stats.t.ppf(0.975, df=n - 1))
+
+    def _ci(values):
+        return float(t_crit * np.std(values, ddof=1) / np.sqrt(n))
+
     summary = {
         "macro_f1_mean": float(np.mean(macro_f1s)),
-        "macro_f1_std": float(np.std(macro_f1s)),
+        "macro_f1_std": float(np.std(macro_f1s, ddof=1)),
+        "macro_f1_ci95": _ci(macro_f1s),
         "weighted_f1_mean": float(np.mean(weighted_f1s)),
-        "weighted_f1_std": float(np.std(weighted_f1s)),
+        "weighted_f1_std": float(np.std(weighted_f1s, ddof=1)),
+        "weighted_f1_ci95": _ci(weighted_f1s),
         "accuracy_mean": float(np.mean(accuracies)),
-        "accuracy_std": float(np.std(accuracies)),
+        "accuracy_std": float(np.std(accuracies, ddof=1)),
+        "accuracy_ci95": _ci(accuracies),
         "balanced_accuracy_mean": float(np.mean(balanced_accs)),
-        "balanced_accuracy_std": float(np.std(balanced_accs)),
+        "balanced_accuracy_std": float(np.std(balanced_accs, ddof=1)),
+        "balanced_accuracy_ci95": _ci(balanced_accs),
+        "n_seeds": n,
+        "t_critical": t_crit,
         "per_seed": all_metrics,
     }
 
@@ -189,15 +206,18 @@ def plot_confusion_matrix(
     class_names: list[str],
     backbone: str,
     results_dir: Path,
+    class_labels: dict[str, str] | None = None,
 ):
     """Plot normalised confusion matrix."""
+    if class_labels is None:
+        class_labels = CLASS_LABELS
     cm_arr = np.array(cm, dtype=float)
     cm_norm = cm_arr / cm_arr.sum(axis=1, keepdims=True)
 
     fig, ax = plt.subplots(figsize=(10, 8))
     im = ax.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
 
-    short_names = [CLASS_LABELS.get(n, n) for n in class_names]
+    short_names = [class_labels.get(n, n) for n in class_names]
     ax.set_xticks(range(len(short_names)))
     ax.set_yticks(range(len(short_names)))
     ax.set_xticklabels(short_names, rotation=45, ha="right", fontsize=8)
@@ -240,6 +260,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-trials", type=int, default=100, help="Max Optuna trials per sampler.")
     parser.add_argument("--patience", type=int, default=20, help="Early stopping patience (trials).")
     parser.add_argument("--include-gp", action="store_true", help="Also run GP sampler (slow — O(n³) surrogate fitting).")
+    parser.add_argument("--five-class", action="store_true", help="Merge to 5-class WBC differential before training.")
+    parser.add_argument(
+        "--feature-set", choices=["all", "tavakoli"], default="all",
+        help="For handcrafted backbones: 'tavakoli' keeps only the 51 baseline features.",
+    )
     return parser.parse_args()
 
 
@@ -300,23 +325,45 @@ def main() -> int:
     results_dir: Path = args.results_dir.resolve()
 
     backbones_to_run = [args.backbone] if args.backbone else BACKBONES
+    suffix = "_5class" if args.five_class else ""
     all_results = {}
 
     for backbone in backbones_to_run:
-        print(f"\n{'='*60}")
-        print(f"  {backbone}")
-        print(f"{'='*60}")
-
         # Load features
         data = load_features(results_dir, backbone)
+
+        feat_suffix = ""
+        if args.feature_set == "tavakoli":
+            fn = data["feature_names"]
+            if fn is None:
+                print(f"ERROR: --feature-set tavakoli needs feature_names; {backbone} has none.", file=sys.stderr)
+                return 1
+            keep = [i for i, name in enumerate(fn) if name in set(TAVAKOLI_51)]
+            if len(keep) != 51:
+                print(f"WARNING: matched {len(keep)}/51 Tavakoli features.")
+            for key in ("train_X", "val_X", "test_X"):
+                data[key] = data[key][:, keep]
+            feat_suffix = "_tavakoli"
+
+        if args.five_class:
+            data = reduce_to_5class(data)
+
+        result_key = f"{backbone}{feat_suffix}{suffix}"
+        print(f"\n{'='*60}")
+        print(f"  {result_key}")
+        print(f"{'='*60}")
+        if feat_suffix:
+            print("  Feature subset: Tavakoli-51")
+
         X_train, y_train = data["train_X"], data["train_y"]
         X_val, y_val = data["val_X"], data["val_y"]
         X_test, y_test = data["test_X"], data["test_y"]
         le = data["label_encoder"]
         n_classes = len(le.classes_)
 
+        mode = "5-class" if args.five_class else "13-class"
         print(f"  Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
-        print(f"  Classes: {n_classes}")
+        print(f"  Classes: {n_classes} ({mode})")
         print()
 
         objective_fn = make_objective(X_train, y_train, X_val, y_val, n_classes)
@@ -380,20 +427,22 @@ def main() -> int:
         print(f"  Test balanced acc:{eval_results['balanced_accuracy_mean']:.4f} ± {eval_results['balanced_accuracy_std']:.4f}")
 
         # ── Plots ───────────────────────────────────────────────────────
-        plot_optuna_history(studies, backbone, results_dir)
-        print(f"  Saved optuna_history_{backbone}.png")
+        plot_optuna_history(studies, result_key, results_dir)
+        print(f"  Saved optuna_history_{result_key}.png")
 
+        class_labels = FIVE_CLASS_LABELS if args.five_class else CLASS_LABELS
         plot_confusion_matrix(
             eval_results["confusion_matrix"],
             list(le.classes_),
-            backbone,
+            result_key,
             results_dir,
+            class_labels=class_labels,
         )
-        print(f"  Saved confusion_matrix_{backbone}.png")
+        print(f"  Saved confusion_matrix_{result_key}.png")
 
         # ── Store results ───────────────────────────────────────────────
         gp_study = studies.get("GP")
-        all_results[backbone] = {
+        all_results[result_key] = {
             "best_sampler": best_study_name,
             "best_val_macro_f1": float(best_study.best_value),
             "best_params": best_params,

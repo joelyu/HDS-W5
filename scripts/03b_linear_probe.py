@@ -18,7 +18,9 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from scipy import stats
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -27,7 +29,7 @@ from sklearn.metrics import (
     f1_score,
 )
 
-from config import BACKBONES, SEEDS, load_features
+from config import BACKBONES, SEEDS, TAVAKOLI_51, load_features, reduce_to_5class
 
 
 def evaluate_with_seeds(
@@ -68,15 +70,28 @@ def evaluate_with_seeds(
     accuracies = [m["accuracy"] for m in all_metrics]
     balanced_accs = [m["balanced_accuracy"] for m in all_metrics]
 
+    # 95% confidence interval: t * (std / sqrt(n))
+    n = len(seeds)
+    t_crit = float(stats.t.ppf(0.975, df=n - 1))
+
+    def _ci(values):
+        return float(t_crit * np.std(values, ddof=1) / np.sqrt(n))
+
     summary = {
         "macro_f1_mean": float(np.mean(macro_f1s)),
-        "macro_f1_std": float(np.std(macro_f1s)),
+        "macro_f1_std": float(np.std(macro_f1s, ddof=1)),
+        "macro_f1_ci95": _ci(macro_f1s),
         "weighted_f1_mean": float(np.mean(weighted_f1s)),
-        "weighted_f1_std": float(np.std(weighted_f1s)),
+        "weighted_f1_std": float(np.std(weighted_f1s, ddof=1)),
+        "weighted_f1_ci95": _ci(weighted_f1s),
         "accuracy_mean": float(np.mean(accuracies)),
-        "accuracy_std": float(np.std(accuracies)),
+        "accuracy_std": float(np.std(accuracies, ddof=1)),
+        "accuracy_ci95": _ci(accuracies),
         "balanced_accuracy_mean": float(np.mean(balanced_accs)),
-        "balanced_accuracy_std": float(np.std(balanced_accs)),
+        "balanced_accuracy_std": float(np.std(balanced_accs, ddof=1)),
+        "balanced_accuracy_ci95": _ci(balanced_accs),
+        "n_seeds": n,
+        "t_critical": t_crit,
         "per_seed": all_metrics,
     }
 
@@ -100,28 +115,60 @@ def main() -> int:
         default=Path(__file__).resolve().parent.parent / "results",
     )
     parser.add_argument("--backbone", choices=BACKBONES, default=None)
+    parser.add_argument("--five-class", action="store_true", help="Merge to 5-class WBC differential before training.")
+    parser.add_argument(
+        "--feature-set", choices=["all", "tavakoli"], default="all",
+        help="For handcrafted backbones: 'tavakoli' keeps only the 51 baseline features.",
+    )
     args = parser.parse_args()
 
     results_dir = args.results_dir.resolve()
     backbones_to_run = [args.backbone] if args.backbone else BACKBONES
+    suffix = "_5class" if args.five_class else ""
     all_results = {}
 
     for backbone in backbones_to_run:
-        print(f"\n{'='*60}")
-        print(f"  {backbone} — Linear Probe")
-        print(f"{'='*60}")
-
         data = load_features(results_dir, backbone)
+
+        feat_suffix = ""
+        if args.feature_set == "tavakoli":
+            fn = data["feature_names"]
+            if fn is None:
+                print(f"ERROR: --feature-set tavakoli needs feature_names; {backbone} has none.", file=sys.stderr)
+                return 1
+            keep = [i for i, name in enumerate(fn) if name in set(TAVAKOLI_51)]
+            if len(keep) != 51:
+                print(f"WARNING: matched {len(keep)}/51 Tavakoli features.")
+            for key in ("train_X", "val_X", "test_X"):
+                data[key] = data[key][:, keep]
+            feat_suffix = "_tavakoli"
+
+        if args.five_class:
+            data = reduce_to_5class(data)
+
+        result_key = f"{backbone}{feat_suffix}{suffix}"
+        print(f"\n{'='*60}")
+        print(f"  {result_key} — Linear Probe")
+        print(f"{'='*60}")
+        if feat_suffix:
+            print("  Feature subset: Tavakoli-51")
+
         X_train, y_train = data["train_X"], data["train_y"]
         X_val, y_val = data["val_X"], data["val_y"]
         X_test, y_test = data["test_X"], data["test_y"]
         le = data["label_encoder"]
 
-        print(f"  Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
+        mode = "5-class" if args.five_class else "13-class"
+        print(f"  Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape} ({mode})")
 
         # Combine train+val (no HP tuning needed — just regularisation default)
         X_trainval = np.concatenate([X_train, X_val])
         y_trainval = np.concatenate([y_train, y_val])
+
+        # Scale features — logistic regression is sensitive to feature scale
+        scaler = StandardScaler()
+        X_trainval = scaler.fit_transform(X_trainval)
+        X_test = scaler.transform(X_test)
 
         print(f"  Evaluating ({len(SEEDS)} seeds)...")
         eval_results = evaluate_with_seeds(
@@ -133,10 +180,15 @@ def main() -> int:
         print(f"  Accuracy:      {eval_results['accuracy_mean']:.4f} ± {eval_results['accuracy_std']:.4f}")
         print(f"  Balanced Acc:  {eval_results['balanced_accuracy_mean']:.4f} ± {eval_results['balanced_accuracy_std']:.4f}")
 
-        all_results[backbone] = {"test_results": eval_results}
+        all_results[result_key] = {"test_results": eval_results}
 
-    # Save results
+    # Save results (merge with existing if running per-backbone)
     out_path = results_dir / "linear_probe_results.json"
+    if out_path.exists():
+        with open(out_path) as f:
+            existing = json.load(f)
+        existing.update(all_results)
+        all_results = existing
     with open(out_path, "w") as f:
         json.dump(all_results, f, indent=2)
     print(f"\nSaved {out_path}")
