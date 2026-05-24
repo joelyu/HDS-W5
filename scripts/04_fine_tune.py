@@ -29,6 +29,7 @@ warnings.filterwarnings("ignore", message=".*xFormers is not available.*")
 
 import numpy as np
 import optuna
+from scipy import stats
 import pandas as pd
 import torch
 import torch.nn as nn
@@ -42,7 +43,7 @@ from sklearn.metrics import (
     confusion_matrix,
     f1_score,
 )
-from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset
 
 from config import (
     BACKBONES,
@@ -172,6 +173,23 @@ def configure_freezing(model: nn.Module, backbone_name: str, unfreeze: str) -> N
 # ── Training loop ──────────────────────────────────────────────────────────
 
 
+class SubsetWrapper(Dataset):
+    """Wrap a Subset to expose parent dataset attributes needed by training."""
+
+    def __init__(self, subset, parent):
+        self.subset = subset
+        self.df = parent.df.iloc[subset.indices].reset_index(drop=True)
+        self.le = parent.le
+        self.image_root = parent.image_root
+        self.transform = parent.transform
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, idx):
+        return self.subset[idx]
+
+
 def compute_class_weights(dataset: PBCDataset) -> torch.Tensor:
     """Compute inverse-frequency class weights."""
     labels = dataset.df["cell_type"].values
@@ -182,16 +200,6 @@ def compute_class_weights(dataset: PBCDataset) -> torch.Tensor:
     weights = weights / weights.sum() * NUM_CLASSES
     return torch.tensor(weights, dtype=torch.float32)
 
-
-def make_weighted_sampler(dataset: PBCDataset) -> WeightedRandomSampler:
-    """Create a WeightedRandomSampler for class-balanced batches."""
-    labels = dataset.le.transform(dataset.df["cell_type"].values)
-    counts = np.bincount(labels, minlength=NUM_CLASSES).astype(float)
-    class_weights = 1.0 / (counts + 1e-6)
-    sample_weights = class_weights[labels]
-    return WeightedRandomSampler(
-        weights=sample_weights, num_samples=len(sample_weights), replacement=True
-    )
 
 
 def train_one_epoch(
@@ -250,12 +258,13 @@ def train_model(
     class_weights = compute_class_weights(train_dataset).to(device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
 
-    sampler = make_weighted_sampler(train_dataset)
+    nw = 0 if device.type == "mps" else 2
+    pm = device.type == "cuda"
     train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, sampler=sampler, num_workers=2, pin_memory=True
+        train_dataset, batch_size=batch_size, shuffle=True, num_workers=nw, pin_memory=pm
     )
     val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True
+        val_dataset, batch_size=batch_size, shuffle=False, num_workers=nw, pin_memory=pm
     )
 
     optimizer = torch.optim.AdamW(
@@ -330,7 +339,8 @@ def run_optuna(
         return best_f1
 
     pruner = optuna.pruners.HyperbandPruner(min_resource=3, max_resource=n_epochs, reduction_factor=3)
-    study = optuna.create_study(direction="maximize", pruner=pruner)
+    sampler = optuna.samplers.TPESampler(seed=42)
+    study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner)
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
     print(f"  Best trial: {study.best_value:.4f} (trial {study.best_trial.number})")
@@ -363,8 +373,10 @@ def evaluate_multiseed(
     best_state_overall = None
 
     le = trainval_train_dataset.le
+    nw = 0 if device.type == "mps" else 2
+    pm = device.type == "cuda"
     test_loader = DataLoader(
-        test_dataset, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True
+        test_dataset, batch_size=batch_size, shuffle=False, num_workers=nw, pin_memory=pm
     )
     # Pre-compute test labels from dataframe (avoids iterating dataset)
     test_labels = le.transform(test_dataset.df["cell_type"].values)
@@ -385,21 +397,6 @@ def evaluate_multiseed(
         val_sub_eval = torch.utils.data.Subset(
             trainval_eval_dataset, val_sub.indices
         )
-
-        # Wrap subsets to have .df and .le for sampler
-        class SubsetWrapper(Dataset):
-            def __init__(self, subset, parent):
-                self.subset = subset
-                self.df = parent.df.iloc[subset.indices].reset_index(drop=True)
-                self.le = parent.le
-                self.image_root = parent.image_root
-                self.transform = parent.transform
-
-            def __len__(self):
-                return len(self.subset)
-
-            def __getitem__(self, idx):
-                return self.subset[idx]
 
         train_wrapped = SubsetWrapper(train_sub, trainval_train_dataset)
         val_wrapped = SubsetWrapper(val_sub_eval, trainval_eval_dataset)
@@ -448,15 +445,28 @@ def evaluate_multiseed(
     accuracies = [m["accuracy"] for m in all_metrics]
     balanced_accs = [m["balanced_accuracy"] for m in all_metrics]
 
+    # 95% confidence interval: t * (std / sqrt(n))
+    n = len(seeds)
+    t_crit = float(stats.t.ppf(0.975, df=n - 1))
+
+    def _ci(values):
+        return float(t_crit * np.std(values, ddof=1) / np.sqrt(n))
+
     summary = {
         "macro_f1_mean": float(np.mean(macro_f1s)),
-        "macro_f1_std": float(np.std(macro_f1s)),
+        "macro_f1_std": float(np.std(macro_f1s, ddof=1)),
+        "macro_f1_ci95": _ci(macro_f1s),
         "weighted_f1_mean": float(np.mean(weighted_f1s)),
-        "weighted_f1_std": float(np.std(weighted_f1s)),
+        "weighted_f1_std": float(np.std(weighted_f1s, ddof=1)),
+        "weighted_f1_ci95": _ci(weighted_f1s),
         "accuracy_mean": float(np.mean(accuracies)),
-        "accuracy_std": float(np.std(accuracies)),
+        "accuracy_std": float(np.std(accuracies, ddof=1)),
+        "accuracy_ci95": _ci(accuracies),
         "balanced_accuracy_mean": float(np.mean(balanced_accs)),
-        "balanced_accuracy_std": float(np.std(balanced_accs)),
+        "balanced_accuracy_std": float(np.std(balanced_accs, ddof=1)),
+        "balanced_accuracy_ci95": _ci(balanced_accs),
+        "n_seeds": n,
+        "t_critical": t_crit,
         "per_seed": all_metrics,
     }
 
