@@ -119,10 +119,61 @@ def load_dinobloom_s() -> tuple[torch.nn.Module, int]:
     return model, 384
 
 
+def load_dinobloom_s_multilevel() -> tuple[torch.nn.Module, int]:
+    """DinoBloom-S with multi-level extraction (blocks 4, 8, 12).
+
+    Returns a wrapper that calls get_intermediate_layers and concatenates
+    CLS tokens from early/mid/late blocks → 384×3 = 1152-dim.
+    """
+    from huggingface_hub import hf_hub_download
+
+    model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
+    ckpt_path = hf_hub_download(repo_id="MarrLab/DinoBloom", filename="pytorch_model_s.bin")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    num_tokens = int(1 + (224 / 14) ** 2)
+    model.pos_embed = torch.nn.Parameter(torch.zeros(1, num_tokens, 384))
+    model.load_state_dict(ckpt, strict=True)
+    model.eval()
+
+    class MultiLevelWrapper(torch.nn.Module):
+        def __init__(self, backbone):
+            super().__init__()
+            self.backbone = backbone
+
+        def forward(self, x):
+            # Extract CLS tokens from blocks 3, 7, 11 (0-indexed: early/mid/late)
+            layers = self.backbone.get_intermediate_layers(x, n=[3, 7, 11])
+            # Each layer output: (batch, n_tokens, 384)
+            # n_tokens is 257 (CLS + 256 patches) or 256 (patches only)
+            cls_tokens = []
+            for layer_out in layers:
+                if layer_out.shape[1] == 257:
+                    cls_tokens.append(layer_out[:, 0, :])  # CLS token
+                else:
+                    cls_tokens.append(layer_out.mean(dim=1))  # mean-pool if no CLS
+            return torch.cat(cls_tokens, dim=1)  # (batch, 1152)
+
+    wrapper = MultiLevelWrapper(model)
+    wrapper.eval()
+    return wrapper, 384 * 3  # 1152
+
+
+def load_vit_s16() -> tuple[torch.nn.Module, int]:
+    """ViT-S/16 with ImageNet weights (generic ViT control for DinoBloom comparison)."""
+    import timm
+
+    model = timm.create_model("vit_small_patch16_224", pretrained=True)
+    model.head = torch.nn.Identity()  # remove classifier head
+    model.eval()
+    return model, 384
+
+
 BACKBONES = {
     "resnet50": load_resnet50,
     "efficientnet_b0": load_efficientnet_b0,
     "dinobloom_s": load_dinobloom_s,
+    "vit_s16": load_vit_s16,
+    "dinobloom_s_multilevel": load_dinobloom_s_multilevel,
 }
 
 
