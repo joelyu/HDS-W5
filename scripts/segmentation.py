@@ -19,8 +19,10 @@ from skimage.filters import threshold_multiotsu, threshold_otsu
 warnings.filterwarnings("ignore", category=UserWarning, module="skimage")
 # skimage 0.26 deprecates binary_*/min_size in morphology; we keep the exact
 # calls to preserve the validated Tavakoli-baseline segmentation behaviour
-# (the max_size replacement has different off-by-one semantics).
-warnings.filterwarnings("ignore", category=FutureWarning, module="skimage")
+# (the max_size replacement has different off-by-one semantics). These are
+# raised with stacklevel pointing at the caller, so they are attributed to
+# *this* module, not "skimage" — hence no module= restriction here.
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 def _rgb_to_cmyk(img_rgb: np.ndarray) -> tuple[np.ndarray, ...]:
