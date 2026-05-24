@@ -211,6 +211,17 @@ def run_visualisation(df, image_root, results_dir, dino_scores=None):
     cell_types = sorted(df["cell_type"].unique())
     print(f"Generating segmentation panels for {len(cell_types)} cell types...")
 
+    # Build the image_name -> 16x16 score lookup ONCE. dino_scores[key] on a
+    # loaded .npz is lazy and re-reads the whole array on every access, so doing
+    # this inside the loop reloads the full array thousands of times (OOM).
+    score_by_name = {}
+    if dino_scores is not None:
+        for sp in SPLIT_ORDER:
+            sp_names = dino_scores[f"{sp}_image_name"]
+            sp_maps = dino_scores[f"{sp}_scores"]
+            for i, nm in enumerate(sp_names):
+                score_by_name[nm] = sp_maps[i]
+
     for ct in cell_types:
         row = df[df["cell_type"] == ct].iloc[0]
         class_folder = FOLDER_NAME_MAP[ct]
@@ -226,9 +237,7 @@ def run_visualisation(df, image_root, results_dir, dino_scores=None):
         panels = [("Original", img), ("Nucleus", nucleus_mask),
                   (f"Convex hull  N:C={nc_hull:.2f}", hull_cell)]
         if dino_scores is not None:
-            split = row["split"]
-            score = {nm: dino_scores[f"{split}_scores"][i]
-                     for i, nm in enumerate(dino_scores[f"{split}_image_name"])}.get(row["image_name"])
+            score = score_by_name.get(row["image_name"])
             if score is not None:
                 dino_cell, fell = cell_mask_dinobloom(score, nucleus_mask, img_float.shape[:2])
                 nc_dino = nucleus_mask.sum() / dino_cell.sum() if dino_cell.sum() else 0
