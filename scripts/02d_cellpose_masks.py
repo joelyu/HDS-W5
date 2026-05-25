@@ -195,9 +195,10 @@ def main() -> int:
                     failed += 1
                     if failed <= 5:
                         print(f"\n  WARNING: failed on {row['image_name']}: {e}")
-                # Periodic cleanup bounds MPS/CUDA memory growth (every ~25 processed).
-                if (i + 1) % 25 == 0:
-                    _clear_memory()
+                # Clear GPU cache + GC after every image. The every-25 version still
+                # let MPS memory creep (27%->56% mid-run), so be aggressive — the
+                # per-image cost is a few ms against ~1s of inference.
+                _clear_memory()
             if (i + 1) % 200 == 0 or (i + 1) == n:
                 print(f"\r  {i + 1}/{n} (skip {skipped}, fail {failed}, {time.time() - t0:.0f}s)", end="", flush=True)
         print()
