@@ -2,9 +2,17 @@ import numpy as np
 import config
 
 
-def test_handcrafted_dino_registered():
-    assert "handcrafted_dino" in config.BACKBONES
-    assert config.BACKBONE_DISPLAY["handcrafted_dino"] == "Handcrafted (DinoBloom seg)"
+def test_handcrafted_cellpose_registered():
+    assert "handcrafted_cellpose" in config.BACKBONES
+    assert config.BACKBONE_DISPLAY["handcrafted_cellpose"] == "Handcrafted (CellPose seg)"
+
+
+def test_handcrafted_dino_not_registered():
+    # DinoBloom-as-segmenter was abandoned (documented negative result); the
+    # backbone entry is dropped so bare 03/03b loops don't sys.exit on a
+    # missing handcrafted_dino_features.npz.
+    assert "handcrafted_dino" not in config.BACKBONES
+    assert "handcrafted_dino" not in config.BACKBONE_DISPLAY
 
 
 def test_tavakoli_51_has_51_names():
