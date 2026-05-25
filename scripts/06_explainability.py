@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
 """Explainability visualisations for frozen backbone → XGBoost pipelines.
 
+Generate-everything exploration tool: produces every explainability view that is
+available and meaningful for the models we have. Pick the report figures later.
+
 Produces:
-    1. UMAP: 2D embedding of test set features, coloured by class — one per backbone
-       plus a combined panel comparing all three.
-    2. SHAP: Feature importance for XGBoost classifiers — summary beeswarm plots.
-    3. Attention maps: PCA visualisation of DinoBloom-S ViT patch tokens showing
-       where the model attends on sample images.
+    1. UMAP: 2D embedding of test set features, coloured by class — one per
+       feature extractor plus a combined comparison panel (extractor-level, no
+       model: shows whether the representation is class-separable).
+    2. SHAP: feature contributions for the INTERPRETABLE (handcrafted) XGBoost
+       classifiers only — mean-|SHAP| bars, per-class bars, and directional
+       beeswarms with real feature names. Skipped for deep backbones, whose
+       features are abstract dimensions (use UMAP/attention there instead).
+    3. Attention maps: PCA of DinoBloom-S ViT patch tokens showing the frozen
+       backbone's spatial representation.
+
+GradCAM is intentionally absent — it needs a fine-tuned CNN (gradients to conv
+layers), which the frozen→XGBoost pipeline does not provide. It rejoins with
+fine-tuning.
 
 Outputs saved to results/:
-    umap_{backbone}.png               — per-backbone UMAP
-    umap_comparison.png               — side-by-side UMAP (all backbones)
-    shap_{backbone}.png               — SHAP beeswarm for each backbone
-    shap_bar_{backbone}.png           — SHAP bar plot (mean |SHAP|) per class
-    attention_maps_dinobloom.png       — DinoBloom-S attention visualisations
+    umap_{backbone}.png                       — per-extractor UMAP
+    umap_comparison.png                       — side-by-side UMAP
+    shap_bar_{backbone}.png                   — mean-|SHAP| ranking (handcrafted only)
+    shap_{backbone}.png                       — per-class mean-|SHAP| bars (handcrafted only)
+    shap_beeswarm_{backbone}_{class}.png      — directional beeswarm, named feats (handcrafted only)
+    attention_maps_dinobloom.png              — DinoBloom-S patch-PCA
 
 Usage:
     python scripts/06_explainability.py
     python scripts/06_explainability.py --skip-shap          # UMAP + attention only
     python scripts/06_explainability.py --skip-attention      # UMAP + SHAP only
-    python scripts/06_explainability.py --backbone dinobloom_s  # single backbone
+    python scripts/06_explainability.py --backbone handcrafted  # single backbone
 """
 from __future__ import annotations
 
@@ -240,6 +252,29 @@ def plot_shap(
         plt.close(fig)
         print(f"  Saved shap_{backbone}.png")
 
+    # Beeswarm (directional) — one per clinically-key class. Unlike the mean-|SHAP|
+    # bars (magnitude only), the beeswarm colours each sample by its feature VALUE,
+    # so it reads as "high N:C ratio pushes toward blast". Only meaningful with real
+    # feature names, so it is gated on feature_names (handcrafted backbones).
+    if feature_names is not None and isinstance(shap_values, list) and len(shap_values) == len(le.classes_):
+        classes = list(le.classes_)
+        for cls in ["blast", "myelocyte", "lymphocyte", "segmented_neutrophil"]:
+            if cls not in classes:
+                continue
+            cls_idx = classes.index(cls)
+            shap.summary_plot(
+                shap_values[cls_idx], X_explain, feature_names=feature_names,
+                max_display=15, show=False, plot_size=(8, 6),
+            )
+            fig = plt.gcf()
+            # Title on the main (first-created) axis, not the colorbar shap adds.
+            fig.axes[0].set_title(
+                f"SHAP beeswarm — {backbone}: {CLASS_LABELS.get(cls, cls)}", fontsize=11
+            )
+            fig.savefig(results_dir / f"shap_beeswarm_{backbone}_{cls}.png", dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"  Saved shap_beeswarm_{backbone}_{cls}.png")
+
 
 # ── DinoBloom attention maps ───────────────────────────────────────────────
 
@@ -434,6 +469,15 @@ def main() -> int:
                 continue
 
             feat = load_features(results_dir, backbone)
+            fnames = feat.get("feature_names")
+
+            # SHAP only where features are named (handcrafted variants). On deep
+            # backbones SHAP attributes importance to abstract dimensions ("dim 47"),
+            # which has no clinical meaning — UMAP/attention are the right tools there.
+            if fnames is None:
+                print(f"  Skipping SHAP for {backbone} — deep features (abstract dimensions, not interpretable).")
+                continue
+
             best_params = xgb_results[backbone]["best_params"]
 
             # Train model on train+val
@@ -443,11 +487,10 @@ def main() -> int:
             print(f"  Training XGBoost for {backbone}...")
             model = train_best_xgboost(best_params, X_trainval, y_trainval)
 
-            fnames = feat.get("feature_names")
             plot_shap(
                 model, feat["test_X"], feat["label_encoder"],
                 backbone, results_dir, shap_sample=args.shap_sample,
-                feature_names=list(fnames) if fnames is not None else None,
+                feature_names=list(fnames),
             )
 
         print()
