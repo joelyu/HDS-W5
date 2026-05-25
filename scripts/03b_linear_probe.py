@@ -103,6 +103,13 @@ def evaluate_with_seeds(
     )
     summary["confusion_matrix"] = confusion_matrix(y_test, median_preds).tolist()
 
+    # Per-image predictions of the median-seed model + the true labels, for
+    # paired statistical comparison (McNemar / bootstrap) in 05. Label-encoded
+    # ints; same order across models (shared test-split iteration order), which
+    # 05 verifies before pairing.
+    summary["median_predictions"] = [int(x) for x in median_preds]
+    summary["test_y_true"] = [int(x) for x in y_test]
+
     return summary
 
 

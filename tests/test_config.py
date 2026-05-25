@@ -22,6 +22,35 @@ def test_tavakoli_51_has_51_names():
         assert shape in config.TAVAKOLI_51
 
 
+def test_parse_key_plain_backbone():
+    assert config.parse_key("dinobloom_s_multilevel") == {
+        "base": "dinobloom_s_multilevel", "feature_set": "all", "class_mode": "13class",
+    }
+
+
+def test_parse_key_tavakoli_on_cellpose():
+    out = config.parse_key("handcrafted_cellpose_tavakoli")
+    assert out == {"base": "handcrafted_cellpose", "feature_set": "tavakoli", "class_mode": "13class"}
+
+
+def test_parse_key_tavakoli_and_5class():
+    assert config.parse_key("handcrafted_tavakoli_5class") == {
+        "base": "handcrafted", "feature_set": "tavakoli", "class_mode": "5class",
+    }
+
+
+def test_parse_key_5class_only():
+    assert config.parse_key("dinobloom_s_5class") == {
+        "base": "dinobloom_s", "feature_set": "all", "class_mode": "5class",
+    }
+
+
+def test_segmentation_of():
+    assert config.segmentation_of("handcrafted") == "convex-hull"
+    assert config.segmentation_of("handcrafted_cellpose") == "CellPose"
+    assert config.segmentation_of("dinobloom_s") == "—"
+
+
 def test_load_features_passes_feature_names(tmp_path):
     fn = np.array(["solidity", "nc_ratio", "nuc_glcm_contrast"])
     np.savez(

@@ -481,6 +481,11 @@ def evaluate_multiseed(
     # Training history from median seed (for bias-variance tradeoff plots)
     summary["training_history"] = all_histories[median_idx]
 
+    # Per-image predictions of the median-seed model + true labels, for paired
+    # statistical comparison (McNemar / bootstrap) in 05. Label-encoded ints.
+    summary["median_predictions"] = [int(x) for x in median_preds]
+    summary["test_y_true"] = [int(x) for x in test_labels]
+
     return summary
 
 

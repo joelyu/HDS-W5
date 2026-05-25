@@ -150,3 +150,4 @@ dependencies:
       - xgboost==3.2.0
       - pytest==7.4.4
       - cellpose==4.1.1
+      - openpyxl==3.1.5

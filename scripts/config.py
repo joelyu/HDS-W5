@@ -92,6 +92,37 @@ BACKBONE_DISPLAY = {
     "handcrafted_cellpose": "Handcrafted (CellPose seg)",
 }
 
+# Result-key convention (from 03/03b/04): "{base}[_tavakoli][_5class]".
+# parse_key decodes a key back into its axes so 05 can group results across
+# paradigms by segmentation / feature-set / class-mode.
+_FEATURE_SUFFIX = "_tavakoli"
+_CLASS_SUFFIX = "_5class"
+_SEGMENTATION = {"handcrafted": "convex-hull", "handcrafted_cellpose": "CellPose"}
+
+
+def parse_key(key: str) -> dict:
+    """Decode a result key into {base, feature_set, class_mode}.
+
+    Suffixes are stripped from the end in the order 03/03b append them; the
+    remainder is the base backbone. Base names never end in those suffixes, so
+    this is unambiguous even for 'dinobloom_s_multilevel'/'handcrafted_cellpose'.
+    """
+    rest = key
+    class_mode = "13class"
+    if rest.endswith(_CLASS_SUFFIX):
+        rest = rest[: -len(_CLASS_SUFFIX)]
+        class_mode = "5class"
+    feature_set = "all"
+    if rest.endswith(_FEATURE_SUFFIX):
+        rest = rest[: -len(_FEATURE_SUFFIX)]
+        feature_set = "tavakoli"
+    return {"base": rest, "feature_set": feature_set, "class_mode": class_mode}
+
+
+def segmentation_of(base: str) -> str:
+    """Segmentation strategy for a handcrafted base backbone, else '—'."""
+    return _SEGMENTATION.get(base, "—")
+
 # Alphabetical class order — matches LabelEncoder / sklearn output ordering
 CLASS_ORDER_ALPHA = sorted(CLASS_LABELS.keys())
 
