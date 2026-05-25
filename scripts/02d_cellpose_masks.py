@@ -18,17 +18,22 @@ Masks are saved as per-image PNGs in results/cellpose_masks/{image_name}.png
 
 Needs `cellpose` >=4.0 (the Cellpose-SAM "cpsam" super-generalist model) + torch.
 Run on laptop / Mac Studio, NOT the singapore VM. CPSAM is a SAM-based ViT, so
-the full pass is slow — it's a one-time cached precompute.
+the full pass is slow (~12h for 31k images on MPS) — it's a one-time cached
+precompute. The run is RESUMABLE: images whose mask PNG already exists are
+skipped, so a killed run just continues where it stopped on the next launch.
+Periodic GPU-cache clearing keeps memory flat over the long run.
 
 Usage:
-    python scripts/02d_cellpose_masks.py                  # full precompute
+    python scripts/02d_cellpose_masks.py                  # full precompute (resumes if interrupted)
     python scripts/02d_cellpose_masks.py --limit 30       # smoke subset
     python scripts/02d_cellpose_masks.py --qa             # 13-image QA panels
     python scripts/02d_cellpose_masks.py --cpu            # force CPU
+    python scripts/02d_cellpose_masks.py --force          # re-run even if masks exist
 """
 from __future__ import annotations
 
 import argparse
+import gc
 import sys
 import time
 import warnings
@@ -36,12 +41,24 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 from PIL import Image
 
 from config import FOLDER_NAME_MAP, SPLIT_ORDER
 from segmentation import segment_nucleus
 
 warnings.filterwarnings("ignore")
+
+
+def _clear_memory() -> None:
+    """Release accumulated GPU cache + Python garbage. Called periodically in the
+    loop: without it, thousands of CPSAM (SAM-based ViT) inferences creep MPS/CUDA
+    memory until the OS kills the process (observed at ~13.6k images on MPS)."""
+    gc.collect()
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+    elif torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def load_cellpose(gpu: bool):
@@ -90,6 +107,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--limit", type=int, default=None, help="First N images per split (smoke test).")
     p.add_argument("--qa", action="store_true", help="Render 13-image QA panels instead of the full precompute.")
     p.add_argument("--cpu", action="store_true", help="Force CPU (default tries GPU/MPS).")
+    p.add_argument("--force", action="store_true", help="Re-run images whose mask PNG already exists (default: skip = resume).")
     return p.parse_args()
 
 
@@ -158,20 +176,37 @@ def main() -> int:
         if args.limit is not None:
             sdf = sdf.head(args.limit)
         n = len(sdf)
-        empty = 0
+        empty = skipped = failed = 0
         print(f"\n{split}: {n} images")
         for i, row in sdf.iterrows():
-            img = np.array(Image.open(_img_path(image_root, row)).convert("RGB"))
-            masks = segment_instances(model, img)
-            cell = central_instance(masks)
-            if not cell.any():
-                empty += 1
-            Image.fromarray((cell.astype(np.uint8) * 255)).save(out_dir / f"{row['image_name']}.png")
+            out_png = out_dir / f"{row['image_name']}.png"
+            if out_png.exists() and not args.force:
+                skipped += 1  # resume: already done in a previous (possibly killed) run
+            else:
+                try:
+                    img = np.array(Image.open(_img_path(image_root, row)).convert("RGB"))
+                    masks = segment_instances(model, img)
+                    cell = central_instance(masks)
+                    if not cell.any():
+                        empty += 1
+                    Image.fromarray((cell.astype(np.uint8) * 255)).save(out_png)
+                    del img, masks, cell
+                except Exception as e:  # one bad image must not kill a multi-hour run
+                    failed += 1
+                    if failed <= 5:
+                        print(f"\n  WARNING: failed on {row['image_name']}: {e}")
+                # Periodic cleanup bounds MPS/CUDA memory growth (every ~25 processed).
+                if (i + 1) % 25 == 0:
+                    _clear_memory()
             if (i + 1) % 200 == 0 or (i + 1) == n:
-                print(f"\r  {i + 1}/{n} ({time.time() - t0:.0f}s)", end="", flush=True)
+                print(f"\r  {i + 1}/{n} (skip {skipped}, fail {failed}, {time.time() - t0:.0f}s)", end="", flush=True)
         print()
         if empty:
-            print(f"  {empty}/{n} images: CellPose found no cell (02b will fall back to convex hull)")
+            print(f"  {empty} images: CellPose found no cell (02b falls back to convex hull)")
+        if failed:
+            print(f"  {failed} images failed — no mask written; 02b falls back (re-run to retry)")
+        if skipped:
+            print(f"  {skipped}/{n} already done, skipped (resume)")
 
     print(f"\nSaved masks to {out_dir}/ in {(time.time() - t0) / 60:.1f} min")
     return 0
