@@ -41,6 +41,7 @@ from skimage import color
 
 from config import FOLDER_NAME_MAP, SPLIT_ORDER
 from segmentation import (
+    cell_mask_cellpose,
     cell_mask_convex_hull,
     cell_mask_dinobloom,
     segment_nucleus,
@@ -96,7 +97,9 @@ def _extract_12_channels(img_u8: np.ndarray) -> list[np.ndarray]:
 
 
 def extract_cell_features(
-    img_rgb: np.ndarray, dino_score: np.ndarray | None = None
+    img_rgb: np.ndarray,
+    dino_score: np.ndarray | None = None,
+    cellpose_mask: np.ndarray | None = None,
 ) -> tuple[dict[str, float], bool]:
     """Extract the ~65-feature handcrafted vector for one cell image.
 
@@ -104,16 +107,19 @@ def extract_cell_features(
     (N:C ratio, lobe count, nucleus eccentricity/extent, and rotation-averaged
     GLCM texture for nucleus and cytoplasm).
 
-    If dino_score (a 16x16 cellness map) is given, the cell boundary comes from
-    cell_mask_dinobloom; otherwise it is the convex hull of the nucleus.
+    Cell boundary: cellpose_mask (full-res CellPose mask) takes priority, else
+    dino_score (16x16 cellness map) via cell_mask_dinobloom, else the convex
+    hull of the nucleus. The nucleus always comes from the classical segmenter.
 
-    Returns (features, fell_back) — fell_back is True when a DinoBloom mask was
-    requested but degenerated to the convex-hull fallback.
+    Returns (features, fell_back) — fell_back is True when a requested model
+    mask degenerated to the convex-hull fallback.
     """
     img_float = img_rgb.astype(np.float64) / 255.0 if img_rgb.dtype == np.uint8 else img_rgb.copy()
 
     nucleus_mask, lobe_count = segment_nucleus(img_float)
-    if dino_score is not None:
+    if cellpose_mask is not None:
+        cvx_mask, fell_back = cell_mask_cellpose(cellpose_mask, nucleus_mask)
+    elif dino_score is not None:
         cvx_mask, fell_back = cell_mask_dinobloom(dino_score, nucleus_mask, img_float.shape[:2])
     else:
         cvx_mask, fell_back = cell_mask_convex_hull(nucleus_mask), False
@@ -184,8 +190,9 @@ def parse_args() -> argparse.Namespace:
         default=Path(__file__).resolve().parent.parent / "results",
     )
     parser.add_argument(
-        "--segmentation", choices=["convex_hull", "dinobloom"], default="convex_hull",
-        help="Cell-boundary strategy. dinobloom needs results/dinobloom_cell_scores.npz (run 02c first).",
+        "--segmentation", choices=["convex_hull", "dinobloom", "cellpose"], default="convex_hull",
+        help="Cell-boundary strategy. dinobloom needs results/dinobloom_cell_scores.npz (02c); "
+             "cellpose needs results/cellpose_masks/ (02d).",
     )
     parser.add_argument("--force", action="store_true", help="Re-extract even if the output exists.")
     parser.add_argument("--limit", type=int, default=None, help="Process only the first N images per split (smoke test).")
@@ -211,14 +218,14 @@ def run_visualisation(df, image_root, results_dir, dino_scores=None):
     cell_types = sorted(df["cell_type"].unique())
     print(f"Generating segmentation panels for {len(cell_types)} cell types...")
 
-    # Build the image_name -> 16x16 score lookup ONCE. dino_scores[key] on a
+    # Build the image_name -> 16x16 cellness lookup ONCE. dino_scores[key] on a
     # loaded .npz is lazy and re-reads the whole array on every access, so doing
     # this inside the loop reloads the full array thousands of times (OOM).
     score_by_name = {}
     if dino_scores is not None:
         for sp in SPLIT_ORDER:
             sp_names = dino_scores[f"{sp}_image_name"]
-            sp_maps = dino_scores[f"{sp}_scores"]
+            sp_maps = dino_scores[f"{sp}_scores"]  # (N, grid, grid)
             for i, nm in enumerate(sp_names):
                 score_by_name[nm] = sp_maps[i]
 
@@ -284,19 +291,29 @@ def main() -> int:
         return run_visualisation(df, image_root, results_dir, dino_scores)
 
     seg = args.segmentation
-    out_name = "handcrafted_features.npz" if seg == "convex_hull" else "handcrafted_dino_features.npz"
+    out_name = {
+        "convex_hull": "handcrafted_features.npz",
+        "dinobloom": "handcrafted_dino_features.npz",
+        "cellpose": "handcrafted_cellpose_features.npz",
+    }[seg]
     out_path = results_dir / out_name
     if out_path.exists() and not args.force:
         print(f"{out_path} exists; use --force to re-extract.")
         return 0
 
     dino_scores = None
+    cellpose_dir = None
     if seg == "dinobloom":
         score_path = results_dir / "dinobloom_cell_scores.npz"
         if not score_path.exists():
             print(f"ERROR: {score_path} not found. Run 02c_dinobloom_cell_scores.py first.", file=sys.stderr)
             return 1
         dino_scores = np.load(score_path)
+    elif seg == "cellpose":
+        cellpose_dir = results_dir / "cellpose_masks"
+        if not cellpose_dir.exists():
+            print(f"ERROR: {cellpose_dir} not found. Run 02d_cellpose_masks.py first.", file=sys.stderr)
+            return 1
 
     results = {}
     feature_names = None
@@ -313,7 +330,7 @@ def main() -> int:
         score_lookup = {}
         if dino_scores is not None:
             names = dino_scores[f"{split}_image_name"]
-            maps = dino_scores[f"{split}_scores"]
+            maps = dino_scores[f"{split}_scores"]  # (N, grid, grid)
             score_lookup = {nm: maps[i] for i, nm in enumerate(names)}
 
         all_features, all_labels, all_patients = [], [], []
@@ -328,7 +345,14 @@ def main() -> int:
                 score = score_lookup.get(row["image_name"]) if dino_scores is not None else None
                 if dino_scores is not None and score is None:
                     missing += 1
-                feats, fell_back = extract_cell_features(img, dino_score=score)
+                cp_mask = None
+                if cellpose_dir is not None:
+                    mp = cellpose_dir / f"{row['image_name']}.png"
+                    if mp.exists():
+                        cp_mask = np.array(Image.open(mp).convert("L")) > 0
+                    else:
+                        missing += 1
+                feats, fell_back = extract_cell_features(img, dino_score=score, cellpose_mask=cp_mask)
                 fell += int(fell_back)
                 if feature_names is None:
                     feature_names = sorted(feats.keys())
@@ -345,12 +369,13 @@ def main() -> int:
         print()
         if failed:
             print(f"  WARNING: {failed} images failed extraction")
-        if dino_scores is not None:
+        if dino_scores is not None or cellpose_dir is not None:
             total_fallback += fell
-            print(f"  DinoBloom fallback to convex hull: {fell}/{n} ({100*fell/max(n,1):.1f}%)")
+            label = "DinoBloom" if dino_scores is not None else "CellPose"
+            print(f"  {label} fallback to convex hull: {fell}/{n} ({100*fell/max(n,1):.1f}%)")
             if missing:
-                print(f"  WARNING: {missing}/{n} images had NO DinoBloom score "
-                      f"(used convex hull) — run 02c without --limit for full coverage.")
+                print(f"  WARNING: {missing}/{n} images had NO {label} mask "
+                      f"(used convex hull) — run 02c/02d without --limit for full coverage.")
 
         X = np.stack(all_features)
         nan_count = int(np.isnan(X).sum() + np.isinf(X).sum())
@@ -363,8 +388,8 @@ def main() -> int:
         print(f"  Shape: {X.shape}")
 
     print(f"\nTotal time: {(time.time()-t0)/60:.1f} min | dim: {len(feature_names)}")
-    if dino_scores is not None:
-        print(f"Total DinoBloom fallbacks: {total_fallback}")
+    if dino_scores is not None or cellpose_dir is not None:
+        print(f"Total fallbacks to convex hull: {total_fallback}")
     results["feature_names"] = np.array(feature_names)
     np.savez(out_path, **results)
     print(f"Saved {out_path} ({out_path.stat().st_size / 1e6:.1f} MB)")

@@ -52,7 +52,7 @@ SPLIT_ORDER = ["train", "validation", "test"]
 
 NUM_CLASSES = 13
 
-BACKBONES = ["resnet50", "efficientnet_b0", "dinobloom_s", "vit_s16", "dinobloom_s_multilevel", "handcrafted", "handcrafted_dino"]
+BACKBONES = ["resnet50", "efficientnet_b0", "dinobloom_s", "vit_s16", "dinobloom_s_multilevel", "handcrafted", "handcrafted_dino", "handcrafted_cellpose"]
 
 SEEDS = [42, 123, 456, 789, 1024]
 
@@ -90,6 +90,7 @@ BACKBONE_DISPLAY = {
     "dinobloom_s_multilevel": "DinoBloom-S (multi-level)",
     "handcrafted": "Handcrafted",
     "handcrafted_dino": "Handcrafted (DinoBloom seg)",
+    "handcrafted_cellpose": "Handcrafted (CellPose seg)",
 }
 
 # Alphabetical class order — matches LabelEncoder / sklearn output ordering

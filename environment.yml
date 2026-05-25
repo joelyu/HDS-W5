@@ -149,4 +149,5 @@ dependencies:
       - umap-learn==0.5.12
       - xgboost==3.2.0
       - pytest
+      - cellpose>=4.0
 prefix: /opt/homebrew/anaconda3/envs/classileukotion

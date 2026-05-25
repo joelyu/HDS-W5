@@ -189,12 +189,57 @@ def cell_mask_dinobloom(
     frac = area / (rows * cols)
     nuc_area = int(nucleus_mask.sum())
 
+    # Background-grab guard: a real centred cell barely touches the frame edge
+    # and sits near the centre. Masks that grab the field do the opposite — this
+    # catches the PC1/attention failures the area-fraction gate misses.
+    edge = np.zeros((rows, cols), dtype=bool)
+    edge[0, :] = edge[-1, :] = edge[:, 0] = edge[:, -1] = True
+    edge_cover = float((cell & edge).sum()) / float(edge.sum())
+    ys, xs = np.where(cell)
+    if len(ys):
+        cy_off = abs(ys.mean() - rows / 2) / (rows / 2)
+        cx_off = abs(xs.mean() - cols / 2) / (cols / 2)
+        centroid_off = float(np.hypot(cy_off, cx_off))
+    else:
+        centroid_off = 1.0
+
     degenerate = (
         not fg.any()
         or frac < 0.01
         or frac > 0.90
         or (nuc_area > 0 and area < nuc_area * 1.05)  # ~no cytoplasm gained
+        or edge_cover > 0.30                           # spills onto the frame edge
+        or centroid_off > 0.45                         # sits off-centre
     )
     if degenerate:
+        return cell_mask_convex_hull(nucleus_mask), True
+    return cell, False
+
+
+def cell_mask_cellpose(
+    cell_mask: np.ndarray | None, nucleus_mask: np.ndarray
+) -> tuple[np.ndarray, bool]:
+    """Cell mask from a precomputed CellPose instance mask.
+
+    CellPose gives a full-resolution boolean mask for the central cell (from
+    02d). We resize it to the nucleus resolution if needed, union the nucleus
+    in, and fall back to the convex hull when the CellPose mask is missing,
+    empty, or adds essentially no cytoplasm over the nucleus.
+
+    Returns (cell_mask, fell_back).
+    """
+    if cell_mask is None or not np.asarray(cell_mask).any():
+        return cell_mask_convex_hull(nucleus_mask), True
+
+    cm = np.asarray(cell_mask).astype(bool)
+    if cm.shape != nucleus_mask.shape:
+        cm = cv2.resize(
+            cm.astype(np.uint8),
+            (nucleus_mask.shape[1], nucleus_mask.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        ) > 0
+
+    cell = cm | nucleus_mask
+    if cell.sum() < nucleus_mask.sum() * 1.05:  # ~no cytoplasm gained
         return cell_mask_convex_hull(nucleus_mask), True
     return cell, False

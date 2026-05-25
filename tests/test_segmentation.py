@@ -1,5 +1,6 @@
 import numpy as np
 from segmentation import (
+    cell_mask_cellpose,
     cell_mask_convex_hull,
     cell_mask_dinobloom,
     segment_nucleus,
@@ -63,3 +64,46 @@ def test_dino_mask_full_frame_foreground_falls_back():
     nucleus = _nucleus_blob()
     cell, fell_back = cell_mask_dinobloom(score, nucleus, (224, 224))
     assert fell_back
+
+
+def test_dino_mask_background_grab_falls_back():
+    # attention concentrated in the bottom half = off-centre and touching the
+    # bottom border -> the guard should reject it and fall back to convex hull.
+    score = np.zeros((16, 16), dtype=np.float32)
+    score[9:, :] = 1.0
+    nucleus = _nucleus_blob()
+    cell, fell_back = cell_mask_dinobloom(score, nucleus, (224, 224))
+    assert fell_back
+    assert cell[nucleus].all()
+
+
+def test_cellpose_mask_contains_nucleus_and_gains_cytoplasm():
+    nucleus = _nucleus_blob()
+    cp = np.zeros((224, 224), dtype=bool)
+    cp[80:144, 80:144] = True  # larger than the nucleus, overlapping it
+    cell, fell_back = cell_mask_cellpose(cp, nucleus)
+    assert not fell_back
+    assert cell[nucleus].all()
+    assert cell.sum() > nucleus.sum()
+
+
+def test_cellpose_mask_none_falls_back():
+    nucleus = _nucleus_blob()
+    cell, fell_back = cell_mask_cellpose(None, nucleus)
+    assert fell_back
+    assert cell[nucleus].all()
+
+
+def test_cellpose_mask_equal_to_nucleus_falls_back():
+    nucleus = _nucleus_blob()
+    cell, fell_back = cell_mask_cellpose(nucleus.copy(), nucleus)  # no cytoplasm gained
+    assert fell_back
+
+
+def test_cellpose_mask_resized_when_shape_differs():
+    nucleus = _nucleus_blob((224, 224))
+    cp = np.zeros((112, 112), dtype=bool)  # half-res CellPose mask
+    cp[40:72, 40:72] = True
+    cell, fell_back = cell_mask_cellpose(cp, nucleus)
+    assert cell.shape == (224, 224)
+    assert cell[nucleus].all()
