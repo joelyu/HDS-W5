@@ -1,5 +1,5 @@
 import numpy as np
-from features import glcm_descriptors, extra_morphology
+from features import extract_cell_features, glcm_descriptors, extra_morphology
 
 GLCM_KEYS = ["contrast", "correlation", "energy", "homogeneity", "entropy"]
 
@@ -79,3 +79,27 @@ def test_extent_in_unit_interval():
     out = extra_morphology(nucleus, np.ones((40, 40), bool), 2)
     assert 0.0 < out["nuc_extent"] <= 1.0
     assert out["lobe_count"] == 2.0
+
+
+# ── Full per-image extractor (moved from 02b into features.py) ────────────────
+
+# The 65 features = 3 shape + 48 colour ratios (4 x 12 channels) + 5 nucleus
+# GLCM + 5 cytoplasm GLCM + 4 morphology.
+_EXPECTED_N_FEATURES = 65
+
+
+def test_extract_cell_features_returns_65_named_features():
+    # Synthetic centred purple nucleus on a pale background (same shape the
+    # segmentation tests use), exercised through the convex-hull path.
+    img = np.full((80, 80, 3), 220, dtype=np.uint8)
+    img[34:46, 34:46] = (90, 40, 120)
+    feats, fell_back = extract_cell_features(img)
+
+    assert len(feats) == _EXPECTED_N_FEATURES
+    assert fell_back is False  # convex-hull path never reports a fallback
+    for key in ("solidity", "convexity", "circularity", "nc_ratio", "lobe_count",
+                "nuc_eccentricity", "nuc_extent", "nuc_glcm_contrast",
+                "cyt_glcm_entropy", "ncl_cvx_mean_R", "roc_cvx_std_Cb"):
+        assert key in feats
+    assert all(isinstance(v, float) for v in feats.values())
+    assert not any(np.isnan(v) or np.isinf(v) for v in feats.values())
