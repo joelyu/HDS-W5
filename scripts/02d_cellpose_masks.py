@@ -13,8 +13,12 @@ background at 14px patch resolution (see the draft note). CellPose gives a real,
 full-res cytoplasm boundary so the cytoplasm-dependent features (N:C, cytoplasm
 GLCM) become meaningful.
 
-Masks are saved as per-image PNGs in results/cellpose_masks/{image_name}.png
-(loaded one at a time in 02b — memory-safe).
+Two sources:
+  * default (KU-Optofil)  -> results/cellpose_masks/{image_name}.png
+  * --acevedo-dir         -> results/cellpose_masks_acevedo/{filename}.png
+    (only the shared classes 07 validates on; for the handcrafted external arm)
+
+Masks are saved as per-image PNGs (loaded one at a time in 02b/07 — memory-safe).
 
 Needs `cellpose` >=4.0 (the Cellpose-SAM "cpsam" super-generalist model) + torch.
 Run on laptop / Mac Studio, NOT the singapore VM. CPSAM is a SAM-based ViT, so
@@ -24,11 +28,12 @@ skipped, so a killed run just continues where it stopped on the next launch.
 Periodic GPU-cache clearing keeps memory flat over the long run.
 
 Usage:
-    python scripts/02d_cellpose_masks.py                  # full precompute (resumes if interrupted)
-    python scripts/02d_cellpose_masks.py --limit 30       # smoke subset
-    python scripts/02d_cellpose_masks.py --qa             # 13-image QA panels
-    python scripts/02d_cellpose_masks.py --cpu            # force CPU
-    python scripts/02d_cellpose_masks.py --force          # re-run even if masks exist
+    python scripts/02d_cellpose_masks.py                       # KU-Optofil (resumes)
+    python scripts/02d_cellpose_masks.py --acevedo-dir data/acevedo/PBC_dataset_normal_DIB
+    python scripts/02d_cellpose_masks.py --limit 30            # smoke subset
+    python scripts/02d_cellpose_masks.py --qa                 # 13-image QA panels
+    python scripts/02d_cellpose_masks.py --cpu                # force CPU
+    python scripts/02d_cellpose_masks.py --force              # re-run even if masks exist
 """
 from __future__ import annotations
 
@@ -44,15 +49,15 @@ import pandas as pd
 import torch
 from PIL import Image
 
-from config import FOLDER_NAME_MAP, SPLIT_ORDER
+from config import ACEVEDO_TO_KUOPTOFIL, FOLDER_NAME_MAP, SPLIT_ORDER
 from segmentation import segment_nucleus
 
 warnings.filterwarnings("ignore")
 
 
 def _clear_memory() -> None:
-    """Release accumulated GPU cache + Python garbage. Called periodically in the
-    loop: without it, thousands of CPSAM (SAM-based ViT) inferences creep MPS/CUDA
+    """Release accumulated GPU cache + Python garbage. Called after every image:
+    without it, thousands of CPSAM (SAM-based ViT) inferences creep MPS/CUDA
     memory until the OS kills the process (observed at ~13.6k images on MPS)."""
     gc.collect()
     if torch.backends.mps.is_available():
@@ -104,7 +109,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Precompute CellPose cell masks.")
     p.add_argument("--data-dir", type=Path, default=base / "data" / "raw")
     p.add_argument("--results-dir", type=Path, default=base / "results")
-    p.add_argument("--limit", type=int, default=None, help="First N images per split (smoke test).")
+    p.add_argument(
+        "--acevedo-dir", type=Path, default=None,
+        help="Mask Acevedo images (shared classes only) into cellpose_masks_acevedo/ "
+             "instead of KU-Optofil. Point at the PBC_dataset_normal_DIB/ folder.",
+    )
+    p.add_argument("--limit", type=int, default=None, help="First N images per split/class (smoke test).")
     p.add_argument("--qa", action="store_true", help="Render 13-image QA panels instead of the full precompute.")
     p.add_argument("--cpu", action="store_true", help="Force CPU (default tries GPU/MPS).")
     p.add_argument("--force", action="store_true", help="Re-run images whose mask PNG already exists (default: skip = resume).")
@@ -113,6 +123,74 @@ def parse_args() -> argparse.Namespace:
 
 def _img_path(image_root: Path, row) -> Path:
     return image_root / row["path"].split("/")[0] / FOLDER_NAME_MAP[row["cell_type"]] / row["image_name"]
+
+
+def enumerate_kuoptofil(df, image_root: Path, limit: int | None) -> list[tuple[Path, str]]:
+    """KU-Optofil images as (path, '{image_name}.png'), across all splits."""
+    items: list[tuple[Path, str]] = []
+    for split in SPLIT_ORDER:
+        sdf = df[df["split"] == split].reset_index(drop=True)
+        if limit is not None:
+            sdf = sdf.head(limit)
+        for _, row in sdf.iterrows():
+            items.append((_img_path(image_root, row), f"{row['image_name']}.png"))
+    return items
+
+
+def enumerate_acevedo(acevedo_dir: Path, limit: int | None) -> list[tuple[Path, str]]:
+    """Acevedo images as (path, '{filename}.png'), restricted to the shared classes
+    07 validates on (config.ACEVEDO_TO_KUOPTOFIL) so we don't mask classes we drop."""
+    items: list[tuple[Path, str]] = []
+    for folder in sorted(acevedo_dir.iterdir()):
+        if not folder.is_dir() or folder.name.lower() not in ACEVEDO_TO_KUOPTOFIL:
+            continue
+        imgs = sorted(folder.glob("*.jpg")) + sorted(folder.glob("*.png"))
+        if limit is not None:
+            imgs = imgs[:limit]
+        for p in imgs:
+            items.append((p, f"{p.name}.png"))
+    return items
+
+
+def run_masking(model, items: list[tuple[Path, str]], out_dir: Path, force: bool, label: str) -> None:
+    """Mask each (image_path, out_name) in `items` into out_dir.
+
+    Resumable (skips existing PNGs unless force) and memory-safe (clears the GPU
+    cache after every image). A single failed image is logged and skipped, never
+    fatal to the multi-hour run."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    n = len(items)
+    empty = skipped = failed = 0
+    t0 = time.time()
+    print(f"\n{label}: {n} images")
+    for i, (img_path, out_name) in enumerate(items):
+        out_png = out_dir / out_name
+        if out_png.exists() and not force:
+            skipped += 1  # resume: already done in a previous (possibly killed) run
+        else:
+            try:
+                img = np.array(Image.open(img_path).convert("RGB"))
+                masks = segment_instances(model, img)
+                cell = central_instance(masks)
+                if not cell.any():
+                    empty += 1
+                Image.fromarray((cell.astype(np.uint8) * 255)).save(out_png)
+                del img, masks, cell
+            except Exception as e:  # one bad image must not kill a multi-hour run
+                failed += 1
+                if failed <= 5:
+                    print(f"\n  WARNING: failed on {img_path.name}: {e}")
+            _clear_memory()
+        if (i + 1) % 200 == 0 or (i + 1) == n:
+            print(f"\r  {i + 1}/{n} (skip {skipped}, fail {failed}, {time.time() - t0:.0f}s)", end="", flush=True)
+    print()
+    if empty:
+        print(f"  {empty} images: CellPose found no cell (02b/07 fall back to convex hull)")
+    if failed:
+        print(f"  {failed} images failed — no mask written; falls back (re-run to retry)")
+    if skipped:
+        print(f"  {skipped}/{n} already done, skipped (resume)")
+    print(f"  Saved masks to {out_dir}/ in {(time.time() - t0) / 60:.1f} min")
 
 
 def run_qa(df, image_root, results_dir, model) -> int:
@@ -152,9 +230,27 @@ def run_qa(df, image_root, results_dir, model) -> int:
 
 def main() -> int:
     args = parse_args()
-    data_dir, results_dir = args.data_dir.resolve(), args.results_dir.resolve()
+    results_dir = args.results_dir.resolve()
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    print(f"Loading Cellpose-SAM (cpsam, gpu={not args.cpu})...")
+    model = load_cellpose(gpu=not args.cpu)
+
+    # ── Acevedo external-validation masks ──────────────────────────────
+    if args.acevedo_dir is not None:
+        acevedo_dir = args.acevedo_dir.resolve()
+        if not acevedo_dir.exists():
+            print(f"ERROR: {acevedo_dir} not found.", file=sys.stderr)
+            return 1
+        items = enumerate_acevedo(acevedo_dir, args.limit)
+        if not items:
+            print(f"ERROR: no shared-class images under {acevedo_dir}.", file=sys.stderr)
+            return 1
+        run_masking(model, items, results_dir / "cellpose_masks_acevedo", args.force, "Acevedo")
+        return 0
+
+    # ── KU-Optofil (default) ───────────────────────────────────────────
+    data_dir = args.data_dir.resolve()
     meta = data_dir / "metadata_with_patient_level_splits.csv"
     if not meta.exists():
         print(f"ERROR: {meta} not found.", file=sys.stderr)
@@ -162,54 +258,11 @@ def main() -> int:
     df = pd.read_csv(meta)
     image_root = data_dir / "dataset"
 
-    print(f"Loading Cellpose-SAM (cpsam, gpu={not args.cpu})...")
-    model = load_cellpose(gpu=not args.cpu)
-
     if args.qa:
         return run_qa(df, image_root, results_dir, model)
 
-    out_dir = results_dir / "cellpose_masks"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    t0 = time.time()
-    for split in SPLIT_ORDER:
-        sdf = df[df["split"] == split].reset_index(drop=True)
-        if args.limit is not None:
-            sdf = sdf.head(args.limit)
-        n = len(sdf)
-        empty = skipped = failed = 0
-        print(f"\n{split}: {n} images")
-        for i, row in sdf.iterrows():
-            out_png = out_dir / f"{row['image_name']}.png"
-            if out_png.exists() and not args.force:
-                skipped += 1  # resume: already done in a previous (possibly killed) run
-            else:
-                try:
-                    img = np.array(Image.open(_img_path(image_root, row)).convert("RGB"))
-                    masks = segment_instances(model, img)
-                    cell = central_instance(masks)
-                    if not cell.any():
-                        empty += 1
-                    Image.fromarray((cell.astype(np.uint8) * 255)).save(out_png)
-                    del img, masks, cell
-                except Exception as e:  # one bad image must not kill a multi-hour run
-                    failed += 1
-                    if failed <= 5:
-                        print(f"\n  WARNING: failed on {row['image_name']}: {e}")
-                # Clear GPU cache + GC after every image. The every-25 version still
-                # let MPS memory creep (27%->56% mid-run), so be aggressive — the
-                # per-image cost is a few ms against ~1s of inference.
-                _clear_memory()
-            if (i + 1) % 200 == 0 or (i + 1) == n:
-                print(f"\r  {i + 1}/{n} (skip {skipped}, fail {failed}, {time.time() - t0:.0f}s)", end="", flush=True)
-        print()
-        if empty:
-            print(f"  {empty} images: CellPose found no cell (02b falls back to convex hull)")
-        if failed:
-            print(f"  {failed} images failed — no mask written; 02b falls back (re-run to retry)")
-        if skipped:
-            print(f"  {skipped}/{n} already done, skipped (resume)")
-
-    print(f"\nSaved masks to {out_dir}/ in {(time.time() - t0) / 60:.1f} min")
+    items = enumerate_kuoptofil(df, image_root, args.limit)
+    run_masking(model, items, results_dir / "cellpose_masks", args.force, "KU-Optofil")
     return 0
 
 
