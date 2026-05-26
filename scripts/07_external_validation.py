@@ -422,7 +422,8 @@ def main() -> int:
 
     if not acevedo_dir.exists():
         print(f"ERROR: Acevedo dataset not found at {acevedo_dir}", file=sys.stderr)
-        print("Download from: https://data.mendeley.com/datasets/snkd93bnjr/1", file=sys.stderr)
+        print("Run: python scripts/00b_download_acevedo.py   (or download manually from "
+              "https://data.mendeley.com/datasets/snkd93bnjr/1)", file=sys.stderr)
         return 1
 
     print("=== Loading Acevedo PBC dataset ===")
