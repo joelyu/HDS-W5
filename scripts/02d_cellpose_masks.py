@@ -144,7 +144,9 @@ def enumerate_acevedo(acevedo_dir: Path, limit: int | None) -> list[tuple[Path, 
     for folder in sorted(acevedo_dir.iterdir()):
         if not folder.is_dir() or folder.name.lower() not in ACEVEDO_TO_KUOPTOFIL:
             continue
-        imgs = sorted(folder.glob("*.jpg")) + sorted(folder.glob("*.png"))
+        # Exclude macOS dotfiles (.DS_Store, ._* AppleDouble) that glob matches.
+        imgs = [p for p in sorted(folder.glob("*.jpg")) + sorted(folder.glob("*.png"))
+                if not p.name.startswith(".")]
         if limit is not None:
             imgs = imgs[:limit]
         for p in imgs:

@@ -99,6 +99,13 @@ TRANSFORM = T.Compose([
 # ── Acevedo data loading ──────────────────────────────────────────────────
 
 
+def _image_files(folder: Path) -> list[Path]:
+    """jpg/png in a folder, excluding macOS dotfiles (.DS_Store, ._* AppleDouble)
+    which `glob("*.jpg")` otherwise matches and PIL can't open."""
+    return [p for p in sorted(folder.glob("*.jpg")) + sorted(folder.glob("*.png"))
+            if not p.name.startswith(".")]
+
+
 def load_acevedo_images(acevedo_dir: Path) -> tuple[list[Path], list[str]]:
     """Scan Acevedo folders, return image paths and labels in KU-Optofil naming.
 
@@ -110,12 +117,12 @@ def load_acevedo_images(acevedo_dir: Path) -> tuple[list[Path], list[str]]:
             continue
         acevedo_class = folder.name.lower()
         if acevedo_class not in ACEVEDO_TO_KUOPTOFIL:
-            n = len(list(folder.glob("*.jpg"))) + len(list(folder.glob("*.png")))
+            n = len(_image_files(folder))
             if n > 0:
                 skipped[acevedo_class] = n
             continue
         kuoptofil_class = ACEVEDO_TO_KUOPTOFIL[acevedo_class]
-        for img_path in sorted(folder.glob("*.jpg")) + sorted(folder.glob("*.png")):
+        for img_path in _image_files(folder):
             image_paths.append(img_path)
             labels.append(kuoptofil_class)
     if skipped:
