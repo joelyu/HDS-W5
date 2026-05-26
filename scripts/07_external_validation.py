@@ -271,7 +271,7 @@ def retrain_linear_shared(kuoptofil_features: dict, shared_le: LabelEncoder, see
     scaler = StandardScaler()
     Xs = scaler.fit_transform(X)
     model = LogisticRegression(
-        max_iter=1000, class_weight="balanced", solver="lbfgs", random_state=seed, n_jobs=-1,
+        max_iter=1000, class_weight="balanced", solver="lbfgs", random_state=seed,
     )
     model.fit(Xs, y)
     return _ScaledPredictor(model, scaler)

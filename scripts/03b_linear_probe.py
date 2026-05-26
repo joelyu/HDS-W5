@@ -50,7 +50,6 @@ def evaluate_with_seeds(
             class_weight="balanced",
             solver="lbfgs",
             random_state=seed,
-            n_jobs=-1,
         )
         model.fit(X_trainval, y_trainval)
         preds = model.predict(X_test)
