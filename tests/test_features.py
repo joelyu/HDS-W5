@@ -1,4 +1,5 @@
 import numpy as np
+import config
 from features import extract_cell_features, glcm_descriptors, extra_morphology
 
 GLCM_KEYS = ["contrast", "correlation", "energy", "homogeneity", "entropy"]
@@ -103,3 +104,18 @@ def test_extract_cell_features_returns_65_named_features():
         assert key in feats
     assert all(isinstance(v, float) for v in feats.values())
     assert not any(np.isnan(v) or np.isinf(v) for v in feats.values())
+
+
+def test_tavakoli_51_is_subset_of_extracted_features():
+    # 03/03b select the Tavakoli-51 baseline *by name* from the 65-feature dict.
+    # The 12-channel list + ratio prefixes are duplicated between config and
+    # features, so a drift in either would silently break the ablation arm
+    # (KeyError, or worse a wrong subset). Assert every Tavakoli name is a real
+    # extractor key, and a strict subset of the full 65.
+    img = np.full((80, 80, 3), 220, dtype=np.uint8)
+    img[34:46, 34:46] = (90, 40, 120)
+    feats, _ = extract_cell_features(img)
+    keys = set(feats)
+    missing = set(config.TAVAKOLI_51) - keys
+    assert not missing, f"Tavakoli-51 names absent from extractor output: {sorted(missing)}"
+    assert set(config.TAVAKOLI_51) < keys  # 51 is a strict subset of the 65

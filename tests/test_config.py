@@ -51,6 +51,61 @@ def test_segmentation_of():
     assert config.segmentation_of("dinobloom_s") == "—"
 
 
+def test_label_encoder_is_alphabetical_and_stable():
+    # The integer<->class mapping the WHOLE pipeline rides on: 02 stores string
+    # labels, 03/03b/07 decode through this encoder, and 05 pairs predictions in
+    # this integer space. If this ordering ever drifts, every saved result and
+    # every confusion-matrix axis label silently desynchronises.
+    le = config.get_label_encoder()
+    assert list(le.classes_) == config.CLASS_ORDER_ALPHA
+    assert len(le.classes_) == config.NUM_CLASSES
+    # Concrete anchors (alphabetical 0..12), not just self-consistency.
+    assert le.transform(["band_neutrophil", "basophil", "blast"]).tolist() == [0, 1, 2]
+    assert le.transform(["segmented_neutrophil"])[0] == 12
+
+
+def test_load_features_encodes_labels_alphabetically(tmp_path):
+    np.savez(
+        tmp_path / "resnet50_features.npz",
+        train_X=np.zeros((3, 4)), train_y=np.array(["blast", "basophil", "band_neutrophil"]),
+        validation_X=np.zeros((1, 4)), validation_y=np.array(["monocyte"]),
+        test_X=np.zeros((1, 4)), test_y=np.array(["segmented_neutrophil"]),
+    )
+    data = config.load_features(tmp_path, "resnet50")
+    # Raw strings preserved...
+    assert list(data["train_y_str"]) == ["blast", "basophil", "band_neutrophil"]
+    # ...and encoded into the alphabetical integer space (blast=2, basophil=1,
+    # band_neutrophil=0; segmented_neutrophil=12).
+    assert data["train_y"].tolist() == [2, 1, 0]
+    assert data["test_y"].tolist() == [12]
+
+
+def test_reduce_to_5class_merges_drops_and_encodes():
+    # band+segmented -> neutrophil; lymphocyte+reactive -> lymphocyte; the six
+    # non-mappable classes are dropped. Encoded to the alphabetical 5-class space.
+    labels = np.array([
+        "band_neutrophil", "segmented_neutrophil", "reactive_lymphocyte",
+        "lymphocyte", "monocyte", "eosinophil", "basophil",
+        "blast", "erythroblast", "giant_platelet",   # all dropped
+    ])
+    X = np.arange(len(labels)).reshape(-1, 1).astype(float)  # row tag = index
+    data = {f"{s}_X": X.copy() for s in ("train", "val", "test")}
+    data.update({f"{s}_y_str": labels.copy() for s in ("train", "val", "test")})
+
+    out = config.reduce_to_5class(data)
+
+    assert list(out["train_y_str"]) == [
+        "neutrophil", "neutrophil", "lymphocyte", "lymphocyte",
+        "monocyte", "eosinophil", "basophil",
+    ]
+    # Dropped rows (indices 7,8,9) removed from X too, surviving order preserved.
+    assert out["train_X"].ravel().tolist() == [0, 1, 2, 3, 4, 5, 6]
+    le = out["label_encoder"]
+    assert list(le.classes_) == ["basophil", "eosinophil", "lymphocyte", "monocyte", "neutrophil"]
+    # basophil=0 eosinophil=1 lymphocyte=2 monocyte=3 neutrophil=4
+    assert out["train_y"].tolist() == [4, 4, 2, 2, 3, 1, 0]
+
+
 def test_load_features_passes_feature_names(tmp_path):
     fn = np.array(["solidity", "nc_ratio", "nuc_glcm_contrast"])
     np.savez(
