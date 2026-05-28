@@ -241,7 +241,16 @@ def main() -> int:
 
         print()
         if failed:
-            print(f"  WARNING: {failed} images failed extraction")
+            # A dropped row would shorten this feature matrix relative to the
+            # other backbones' .npz files, breaking the by-row pairing that 05's
+            # McNemar / bootstrap rely on (and which 05's label-vector guard
+            # cannot always detect). Refuse to save a misaligned matrix.
+            raise RuntimeError(
+                f"{failed} image(s) failed extraction in split '{split}'. Saving would "
+                f"drop those rows and misalign the {seg} feature matrix against the other "
+                f"backbones — 05 pairs predictions by row across .npz files. Fix the "
+                f"failures listed above, then re-run with --force."
+            )
         if dino_scores is not None or cellpose_dir is not None:
             total_fallback += fell
             label = "DinoBloom" if dino_scores is not None else "CellPose"
