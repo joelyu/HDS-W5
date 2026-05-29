@@ -309,6 +309,9 @@ def plot_attention_maps(
     model.load_state_dict(ckpt, strict=True)
     model.eval()
 
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    model.to(device)
+
     transform = T.Compose([
         T.Resize((224, 224)),
         T.ToTensor(),
@@ -348,7 +351,7 @@ def plot_attention_maps(
         # Load and transform
         img_pil = Image.open(img_path).convert("RGB")
         img_resized = img_pil.resize((224, 224))
-        img_tensor = transform(img_pil).unsqueeze(0)
+        img_tensor = transform(img_pil).unsqueeze(0).to(device)
 
         # Extract patch tokens (skip CLS token)
         with torch.no_grad():
@@ -358,9 +361,9 @@ def plot_attention_maps(
             expected_patches = grid_size * grid_size  # 256
             if n_tokens == expected_patches + 1:
                 # CLS token present — remove it
-                patch_tokens = tokens[0, 1:, :].numpy()
+                patch_tokens = tokens[0, 1:, :].cpu().numpy()
             else:
-                patch_tokens = tokens[0, :, :].numpy()
+                patch_tokens = tokens[0, :, :].cpu().numpy()
 
         # PCA to 3 components → RGB
         pca = PCA(n_components=3)

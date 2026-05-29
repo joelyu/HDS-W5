@@ -72,7 +72,7 @@ fi
 
 # ── 5. Evaluation + explainability ───────────────────────────────────────────
 run python -u scripts/05_evaluation.py        # comparison tables + McNemar/bootstrap significance
-run env HF_HUB_OFFLINE=1 python -u scripts/06_explainability.py --skip-attention  # UMAP + SHAP; attention skipped (CPU DINOv2 path segfaults on Apple Silicon — optional figure)
+run env HF_HUB_OFFLINE=1 OMP_NUM_THREADS=1 KMP_DUPLICATE_LIB_OK=TRUE python -u scripts/06_explainability.py
 
 # ── 6. Optional: external validation on Acevedo ──────────────────────────────
 if [[ "$WITH_EXTERNAL" -eq 1 ]]; then
