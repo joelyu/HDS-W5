@@ -1,20 +1,91 @@
 ---
-title: "Peripheral Blood Cell Classification with Foundation Model Features"
+title: "Comparing Feature Extraction Methods for Peripheral Blood Cell Classification"
 author: "Chung Yan Yu (Joel)"
 date: today
 format:
-  pdf:
-    toc: false
-    number-sections: true
-    colorlinks: true
   docx:
     toc: false
-    number-sections: true
+    number-sections: false
+    fig-width: 7
+    fig-dpi: 600
+    reference-doc: custom-reference.docx
 bibliography: references.bib
+csl: nature.csl
 execute:
   echo: false
   warning: false
 ---
+
+
+# Cover Page {.unnumbered .unlisted}
+
+![](cam_logo.png)
+
+### MSt Healthcare Data Science {.unnumbered .unlisted}
+
+#### Authentication of practice {.unnumbered .unlisted}
+
+|   |   |
+|---|---|
+|I confirm that I have fully read and understood the [assignment brief](https://vle.pace.cam.ac.uk/mod/page/view.php?id=2419694) for this module.| **Y** |
+
+#### Details {.unnumbered .unlisted}
+
+|   |   |
+|---|---|
+|Name: Chung Yan|Surname: Yu|
+|Submission Date| DD -- MM -- YY |
+|Word Count: whole assignment including codes| |
+|Word Count: main body excluding abstract, references and supplementary materials| |
+
+#### Permission to share your assignment {.unnumbered .unlisted}
+
+I do give permission to share my assignment with future MSt participants.
+
+#### University statement of originality {.unnumbered .unlisted}
+
+This assignment is the result of my own work and includes nothing which is the outcome of work done in collaboration except as declared in the Preface and specified in the text. It is not substantially the same as any that I have previously submitted for a degree or diploma or other qualification at the University of Cambridge or any other university or similar institution, or that is being concurrently submitted, except as declared in the Preface and specific in the text. I further state that no substantial part of my Portfolio has already been submitted, nor is being concurrently submitted for any such degree, diploma or other qualification at the University of Cambridge or any other university or similar institution except as declared in the Preface and specified in the text.
+
+|   |   |
+|---|---|
+|I confirm the statement of originality as above| **Y** |
+
+#### Questions for reflection {.unnumbered .unlisted}
+
+Self-assessment is an important aspect of feedback literacy, which is, in turn, key to the development of expertise. As you proceed through the MSt Healthcare data science programme, we hope that you will make use of the following prompts to assess your own work on assignments. Specific assignment briefs will likely indicate which of these to address for which assessments, but, in general, we expect you to respond to one or two for each assignment on your course.
+
+For each of the questions, do not spend too long answering -- keep it brief. For each question you answer, limit yourself to no more than three items. And please remember, this is optional and developmental: these cover sheets are designed to create space for self-assessment and feedback dialogue, rather than additional assignment workload.
+
+1. Which aspects of this assignment are you most uncertain about and/or would most like to receive feedback on?
+
+2. What elements are you left pondering after this assignment that you would like to discuss further?
+
+3. How have you incorporated feedback from peers and tutors into this assignment?
+
+4. How, and to what extent, have you been able to incorporate feedback on previous course work into this assignment?
+
+5. Using the wording in the rubric, how would you describe the quality of the different aspects of your work?
+
+#### Declaration of the use of generative AI {.unnumbered .unlisted}
+
+|   |   |
+|---|---|
+| Which permitted use of generative AI are you acknowledging? | |
+| Which generative AI tool did you use (name and version)? | |
+| What did you use the tool for? | |
+| How have you used or changed the generative AI's output? | |
+
+{{< pagebreak >}}
+
+# Abstract {.unnumbered}
+
+
+# Introduction
+
+The classification of peripheral blood cells is a fundamental task in haematology, and the starting diagnostic step of 80% of haematological diseases [@acevedo2019recognition]. Manual classification methods that are prone to inter-observer variability [@fan2024microscope; @schelonka1995differentiation] have been gradually replaced by automated methods with the advent of classical and deep machine learning, with different approaches and philosophies emerging. One approach is radiomics inspired, relying on classical computer vision to engineer handcrafted features guided by haematological expertise [@tavakoli2021new], often with the benefit of requiring comparatively less computational resources that is well-suited for low resource settings. A second approach is leveraging pretrained models as backbones, including convolutional neural networks (CNNs) and vision transformers (ViTs), to extract learned features that can be fed into classifiers [@acevedo2019recognition], with this paradigm further expanding with the emergence of domain-specific foundational models such as DinoBloom [@koch2024dinobloom]. Finally, there is the end-to-end fine-tuning approach that optimises the entire model for blood cell classification [@asghar2024classification], a method requiring substantial computational resources from graphics processing units (GPUs). 
+
+Commercial automated analysers are available, but their high cost and closed-source nature limit their accessibility, particularly in low-resource settings [@fan2024microscope; @kratz2019digital]. With nearly half (47%) of the world population lacking access to diagnostics [@fleming2021lancet], there is a need for affordable, open-source solutions regardless of the technological approach. This study compares the three abovementioned approaches on the recently released KU-Optofil dataset [@yarikan2026largescale], evaluating their performance and trade-offs, and validating the models on an external dataset from another centre [@acevedo2020dataset]. 
+
 
 ```{python}
 #| label: setup
@@ -30,213 +101,952 @@ import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+from PIL import Image
 
 from config import (
     BACKBONES, BACKBONE_DISPLAY, CLASS_ORDER, CLASS_ORDER_ALPHA,
-    CLASS_LABELS, COLOURS, SPLIT_ORDER, style_axis, load_features,
+    CLASS_LABELS, CLASS_COLOURS, CLASS_COLOUR_MAP, FOLDER_NAME_MAP,
+    SPLIT_ORDER, SEEDS,
 )
 
 RESULTS_DIR = Path("../results")
+DATA_DIR = Path("../data/raw")
+
+# ── Colour theme ──────────────────────────────────────────────────────────
+# Okabe-Ito blue as the primary accent colour throughout.
+OI_BLUE = "#0072B2"
+
+# Custom sequential colourmap: white → Okabe-Ito blue (for confusion matrices)
+CMAP_BLUES = mcolors.LinearSegmentedColormap.from_list(
+    "okabe_blues", ["#FFFFFF", OI_BLUE]
+)
+
+# 13-class qualitative palette (Okabe-Ito core + Paul Tol extensions)
+# Already defined in config.py as CLASS_COLOURS / CLASS_COLOUR_MAP
+
+# ── Matplotlib theme ──────────────────────────────────────────────────────
+# Clean, minimal style. Use Helvetica/Arial family to match Word defaults.
+plt.rcParams.update({
+    "figure.facecolor": "white",
+    "axes.facecolor": "white",
+    "axes.edgecolor": "black",
+    "axes.linewidth": 0.5,
+    "axes.grid": False,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "xtick.direction": "out",
+    "ytick.direction": "out",
+    "font.family": "sans-serif",
+    "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
+    "font.size": 9,
+    "axes.titlesize": 10,
+    "axes.labelsize": 9,
+    "figure.dpi": 200,
+})
+
+# ── Load metadata ─────────────────────────────────────────────────────────
+meta_path = DATA_DIR / "metadata_with_patient_level_splits.csv"
+df_meta = pd.read_csv(meta_path)
+image_root = DATA_DIR / "dataset"
 ```
 
-## Abstract
+# Methods
 
+## Dataset
 
-## Introduction
-
-
-
-## Methods
-
-### Dataset
+The [KU-Optofil dataset](https://zenodo.org/records/17333317) [@yarikan2026largescale] contains 31,484 images of peripheral blood cells of 13 classes, from 276 patients. The images are stained using the May-Grünwald-Giemsa method and collected with the Sysmex DI-60 system, and the 13 classes are band neutrophils, basophils, blasts, eosinophils, erythroblasts, giant platelets, lymphocytes, metamyelocytes, monocytes, myelocytes, platelet clusters, reactive lymphocytes, and segmented neutrophils [@fig-eda]a. The metadata provided patient level splits of training (193 patients, 23,057 images), validation (27 patients, 2,662 images) and test (56 patients, 5,765 images), the implementation of which prevented patient level leakage. The images, sized 368 × 368 pixels, were labelled by two expert haematologists with a third expert resolving disagreements, with all classes achieving a Cohen's kappa (κ) of at least 0.85, most classes ≥ 0.94, and several classes in perfect agreement (κ = 1.00). There is however a severe class imbalance [@fig-eda]b, with segmented neutrophils making up more than half of the dataset (51.6%) and lymphocytes (18.3%), while band neutrophils (0.6%), metamyelocytes (0.8%), and myelocytes (0.3%), and erythroblasts (0.8%) each represent less than 1%. 
 
 ```{python}
-#| label: fig-class-distribution
-#| fig-cap: "Class distribution across train/validation/test splits in the KU-Optofil dataset."
+#| label: fig-eda
+#| fig-cap: "KU-Optofil dataset overview. (a) Representative images for each of the 13 cell classes, sampled from the training set. (b) Class distribution across the full dataset."
 
-from PIL import Image
-img = Image.open(RESULTS_DIR / "class_by_split.png")
-plt.figure(figsize=(10, 5))
-plt.imshow(img)
-plt.axis("off")
-plt.tight_layout()
+import matplotlib.gridspec as gridspec
+
+# Full display names for Figure 1 (not abbreviated)
+FULL_NAMES = {
+    "segmented_neutrophil": "Segmented Neutrophil",
+    "band_neutrophil": "Band Neutrophil",
+    "eosinophil": "Eosinophil",
+    "basophil": "Basophil",
+    "lymphocyte": "Lymphocyte",
+    "reactive_lymphocyte": "Reactive Lymphocyte",
+    "monocyte": "Monocyte",
+    "metamyelocyte": "Metamyelocyte",
+    "myelocyte": "Myelocyte",
+    "blast": "Blast",
+    "erythroblast": "Erythroblast",
+    "giant_platelet": "Giant Platelet",
+    "platelet_cluster": "Platelet Cluster",
+}
+
+n_classes = len(CLASS_ORDER)
+counts = df_meta["cell_type"].value_counts().reindex(CLASS_ORDER)
+total = len(df_meta)
+
+# Layout: 13 rows × 2 columns (image | bar chart)
+# Column widths: narrow image panel, wide bar panel
+fig = plt.figure(figsize=(7, 7))
+gs = gridspec.GridSpec(
+    n_classes, 2, figure=fig,
+    width_ratios=[1, 4],
+    wspace=0.35, hspace=0.12,
+    left=0.01, right=0.88, top=0.98, bottom=0.02,
+)
+
+# ── Panel (a): one sample image per class ─────────────────────────────────
+for i, cls in enumerate(CLASS_ORDER):
+    ax = fig.add_subplot(gs[i, 0])
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    cls_df = df_meta[df_meta["cell_type"] == cls]
+    sample = cls_df.sample(n=1, random_state=42).iloc[0]
+    split = sample["path"].split("/")[0]
+    class_folder = FOLDER_NAME_MAP[sample["cell_type"]]
+    img_path = image_root / split / class_folder / sample["image_name"]
+    if img_path.exists():
+        ax.imshow(Image.open(img_path))
+    else:
+        ax.text(0.5, 0.5, "?", ha="center", va="center",
+                transform=ax.transAxes, fontsize=8, color="grey")
+
+# ── Panel (b): horizontal bar chart aligned to image rows ─────────────────
+# Single axes spanning all rows; we position bars at the vertical centres
+# of the corresponding image axes so alignment is exact.
+ax_bar = fig.add_subplot(gs[:, 1])
+
+vals = counts.values
+bar_labels = [FULL_NAMES[c] for c in counts.index]
+
+# Compute y-positions from image-axis centres (in figure coords → bar data coords)
+fig.canvas.draw()  # force layout so positions are resolved
+img_centres_fig = []
+for i in range(n_classes):
+    pos = gs[i, 0].get_position(fig)
+    img_centres_fig.append((pos.y0 + pos.y1) / 2)
+
+# Map figure y-coords to bar axes data coords
+bar_pos = ax_bar.get_position()
+y_data = []
+for yf in img_centres_fig:
+    # figure coords → axes fraction → data coords
+    frac = (yf - bar_pos.y0) / bar_pos.height
+    y_data.append(frac)
+
+# Use axes-fraction coordinates directly: set y-axis limits to [0, 1]
+ax_bar.set_ylim(0, 1)
+bar_height = 0.8 / n_classes
+
+bars = ax_bar.barh(
+    y_data, vals,
+    color=OI_BLUE, edgecolor="white", linewidth=0.5, height=bar_height,
+)
+
+ax_bar.set_yticks(y_data)
+ax_bar.set_yticklabels(bar_labels, fontsize=7)
+ax_bar.set_xlabel("Number of images", fontsize=8)
+ax_bar.tick_params(axis="x", labelsize=7)
+
+# Percentage labels at end of each bar
+for bar, val in zip(bars, vals):
+    pct = val / total * 100
+    ax_bar.text(
+        bar.get_width() + total * 0.005,
+        bar.get_y() + bar.get_height() / 2,
+        f"{int(val):,} ({pct:.1f}%)",
+        ha="left", va="center", fontsize=6,
+    )
+
+# Extend x-axis to fit labels
+ax_bar.set_xlim(0, max(vals) * 1.28)
+
+# Panel labels
+fig.text(0.01, 0.995, "(a)", fontsize=10, fontweight="bold", va="top")
+fig.text(gs[0, 1].get_position(fig).x0, 0.995, "(b)",
+         fontsize=10, fontweight="bold", va="top")
+
 plt.show()
 ```
 
-### Feature Extraction
 
 
-### Frozen-Feature Classifiers
+![Modelling pipeline. Input images are processed through three parallel paths: (i) frozen pretrained backbones producing learned feature vectors, (ii) handcrafted morphological feature extraction using cell segmentation, and (iii) end-to-end fine-tuning. Paths (i) and (ii) feed the same lightweight classifiers.](flowchart@3x.png){#fig-pipeline width=100%}
 
-#### XGBoost
+
+
+## Feature Extraction and Classification
+
+Four pretrained deep learning models were used as feature extractors. Two CNNs, ResNet-50 (2048 dimensions) and EfficientNet-B0 (1280 dimensions) were chosen as baseline general-purpose informed feature extractors. DinoBloom-S (384 dimensions), a ViT-based foundational model self-supervised on haematological images [@koch2024dinobloom] was chosen as the domain-informed feature extractor. Finally, to provide a non-domain specific ViT baseline, the ViT-S/16 (384 dimensions) of the same ViT family as DinoBloom-S was used. All images were resized to 224 × 224 pixels and normalised with ImageNet statistics.
+
+To create handcrafted features, 65 morphological features were engineered based on existing literature [@tavakoli2021new; @dasariraju2020detection]. These features were created using the ratios in sizes, colours and textures (grey level co-occurrence matrix: GLCM) between cell, cytoplasm and the nucleus, along with shape metrics such as circularity and solidity. To obtain these ratios, the nucleus and the cell both required segmentation. The nucleus was segmented using the same multi-Otsu thresholding method throughout, while the cell was segmented using two approaches: the convex hull of the nucleus [@tavakoli2021new] and the CellPose SAM model [@pachitariu2025cellpose]. Both approaches were used as the convex hull method is computationally cheaper but could provide a coarser segmentation of the cell, while the CellPose SAM model is more computationally expensive but could provide more accurate cell segmentation. This created two models with handcrafted features, which along with four pretrained backbone models, were fed into the same classifiers below for direct comparisons of the feature extraction methods.
+
+Two classifiers were used on the features generated by the abovementioned feature extractors: XGBoost using Optuna [@akiba2019optuna] via the tree-structured Parzen Estimator (TPE) to tune nine hyperparameters with 100 trials; linear probe using logistic regression with L2 regularisation. XGBoost was chosen for its native multiclass support, ability to learn non-linear interactions and CPU-computation support; linear probe is used as a baseline. Another two models were fine-tuned end-to-end using the ResNet-50 and EfficientNet-B0 backbones, using Optuna with TPE again for 30 trials with HyperbandPruner for hyperparameter tuning, with a maximum of 50 epochs and early stopping. All three approaches are visualised in the [@fig-pipeline] flowchart.
+
+To account for the class imbalance within the dataset, all classifiers used inverse-frequency class weighting to ensure consistent handling of this severe imbalance across all paradigms, and the macro F1 score was used as the optimisation metric for all hyperparameter tuning.
+
+## Evaluation
+
+As with hyperparameter tuning, the macro F1 score was the primary evaluation metric, as it is sensitive to rare-class performance. Accuracy and weighted F1 score were also reported for literature comparability. XGBoost and fine-tuned models were evaluated across five different random seeds for stability; linear probes are deterministic and require no seed variation. All metrics are reported in [@tbl-main]. For model-model comparison, deltas (Δ) in macro F1 were bootstrapped with 2,000 resamples to obtain 95% confidence intervals (CIs), along with Holm-corrected p-values from McNemar's test.
+
+An [external dataset](https://data.mendeley.com/datasets/snkd93bnjr/1) from Acevedo et al. [@acevedo2020dataset] containing 17,092 images with eight classes obtained via the CellaVision DM96 system and stained with May-Grünwald-Giemsa was used for external validation. Six shared classes between KU-Optofil and Acevedo were evaluated, with "neutrophil" in Acevedo mapped to "segmented neutrophil" in KU-Optofil, and immature granulocytes and platelets dropped. Classifiers were re-trained on KU-Optofil restricted to the six shared classes, reusing best hyperparameters from the 13-class tuning; no Acevedo data was used for training.
+
+## Reproducibility and Hardware
+
+The code for this project is available on GitHub in this [repository](https://github.com/joelyu/HDS-W5.git). Package versions are listed in `requirements.txt`. An anaconda environment can be created with `conda env create -f environment.yml` as well, and the `run_all.sh` script can be used to run all scripts in the correct order. Datasets and model weights are auto-downloaded via scripts from Zenodo, Mendeley, Hugging Face and torchvision.
+
+All models except the fine-tuned models were trained on an M4 Max Mac Studio with 14-core CPU, 32-core GPU, 36GB RAM. The fine-tuned models were trained on the University of Cambridge CSD3 cluster on NVIDIA A100 GPUs, with a 12-hour wall-time limit.
+
+# Results
 
 ```{python}
-#| label: tbl-xgboost-params
-#| tbl-cap: "Best hyperparameters found by Optuna (TPE sampler) for each backbone."
+#| label: tbl-main
+#| tbl-cap: "Classification performance on the KU-Optofil test set (13-class). XGBoost and end-to-end fine-tuned models report mean ± SD across 5 seeds. Best results for each metric are bolded."
 
-xgb_results = json.load(open(RESULTS_DIR / "xgboost_results.json"))
+import json
 
-rows = []
-for bb in BACKBONES:
-    if bb not in xgb_results:
-        continue
-    params = xgb_results[bb]["best_params"]
-    rows.append({
-        "Backbone": BACKBONE_DISPLAY.get(bb, bb),
-        "n_estimators": params["n_estimators"],
-        "max_depth": params["max_depth"],
-        "learning_rate": f"{params['learning_rate']:.4f}",
-        "subsample": f"{params['subsample']:.2f}",
-        "colsample_bytree": f"{params['colsample_bytree']:.2f}",
-        "Trials": xgb_results[bb]["tpe_trials"],
-        "Val macro F1": f"{xgb_results[bb]['best_val_macro_f1']:.4f}",
-    })
+# ── Load results ──────────────────────────────────────────────────────────
+with open(RESULTS_DIR / "xgboost_results.json") as f:
+    xgb = json.load(f)
+with open(RESULTS_DIR / "linear_probe_results.json") as f:
+    lp = json.load(f)
+with open(RESULTS_DIR / "finetune_results.json") as f:
+    ft = json.load(f)
 
-pd.DataFrame(rows)
+# ── Define rows ───────────────────────────────────────────────────────────
+# (display_name, json_key, classifier)
+frozen_rows = [
+    ("DinoBloom-S (ViT)",        "dinobloom_s"),
+    ("EfficientNet-B0 (CNN)",    "efficientnet_b0"),
+    ("Handcrafted (CellPose)",   "handcrafted_cellpose"),
+    ("Handcrafted (convex hull)","handcrafted"),
+    ("ViT-S/16 (ViT)",          "vit_s16"),
+    ("ResNet-50 (CNN)",          "resnet50"),
+]
+
+ft_rows = [
+    ("ResNet-50 (fine-tuned)",       "resnet50"),
+    ("EfficientNet-B0 (fine-tuned)", "efficientnet_b0"),
+]
+
+def fmt(val, std=None, bold=False):
+    s = f"{val:.3f}"
+    if std is not None and std > 0:
+        s += f" ± {std:.3f}"
+    if bold:
+        s = f"**{s}**"
+    return s
+
+# ── Build long-format rows ────────────────────────────────────────────────
+table_rows = []
+for name, key in frozen_rows:
+    xt = xgb[key]["test_results"]
+    lt = lp[key]["test_results"]
+    table_rows.append({"name": name, "classifier": "XGBoost",
+        "mf1": xt["macro_f1_mean"], "mf1_std": xt["macro_f1_std"],
+        "acc": xt["accuracy_mean"], "wf1": xt["weighted_f1_mean"], "ft": False})
+    table_rows.append({"name": name, "classifier": "Linear probe",
+        "mf1": lt["macro_f1_mean"], "mf1_std": None,
+        "acc": lt["accuracy_mean"], "wf1": lt["weighted_f1_mean"], "ft": False})
+
+for name, key in ft_rows:
+    ftt = ft[key]["test_results"]
+    table_rows.append({"name": name, "classifier": "End-to-end",
+        "mf1": ftt["macro_f1_mean"], "mf1_std": ftt.get("macro_f1_std", None),
+        "acc": ftt["accuracy_mean"], "wf1": ftt["weighted_f1_mean"], "ft": True})
+
+# ── Find best values (frozen only) for bolding ────────────────────────────
+frozen = [r for r in table_rows if not r["ft"]]
+best_mf1 = max(r["mf1"] for r in frozen)
+best_acc = max(r["acc"] for r in frozen)
+best_wf1 = max(r["wf1"] for r in frozen)
+
+# ── Build markdown table ─────────────────────────────────────────────────
+header = "| Feature source | Classifier | Macro F1 | Accuracy | Weighted F1 |"
+sep =    "|:---|:---|:---:|:---:|:---:|"
+lines = [header, sep]
+
+prev_name = None
+for r in table_rows:
+    # Add separator before fine-tuning section
+    if r["ft"] and prev_name is not None and not any(
+        rr["ft"] for rr in table_rows[:table_rows.index(r)]):
+        lines.append("| **End-to-end fine-tuning** | | | | |")
+
+    # Use empty string for repeated backbone names
+    display_name = r["name"] if r["name"] != prev_name else ""
+    prev_name = r["name"]
+
+    cols = [
+        display_name,
+        r["classifier"],
+        fmt(r["mf1"], r["mf1_std"], r["mf1"] == best_mf1 and not r["ft"]),
+        fmt(r["acc"], bold=r["acc"] == best_acc and not r["ft"]),
+        fmt(r["wf1"], bold=r["wf1"] == best_wf1 and not r["ft"]),
+    ]
+    lines.append("| " + " | ".join(cols) + " |")
+
+from IPython.display import Markdown
+Markdown("\n".join(lines))
 ```
 
-#### Linear Probe
+```{python}
+#| label: fig-confusion
+#| fig-cap: "Test assessment confusion matrix on the KU-Optofil dataset, values are row-normalised. (a) DinoBloom-S with XGBoost, (b) DinoBloom-S with linear probe, (c) ResNet-50 with XGBoost."
 
+import json
 
-### End-to-End Fine-Tuning
+# ── Load confusion matrices ───────────────────────────────────────────────
+with open(RESULTS_DIR / "xgboost_results.json") as f:
+    xgb = json.load(f)
+with open(RESULTS_DIR / "linear_probe_results.json") as f:
+    lp = json.load(f)
 
+panels = [
+    ("(a) DinoBloom-S — XGBoost",     np.array(xgb["dinobloom_s"]["test_results"]["confusion_matrix"])),
+    ("(b) DinoBloom-S — Linear probe", np.array(lp["dinobloom_s"]["test_results"]["confusion_matrix"])),
+    ("(c) ResNet-50 — XGBoost",        np.array(xgb["resnet50"]["test_results"]["confusion_matrix"])),
+]
 
-## Results
+# Row-normalise
+panels_norm = []
+for title, cm in panels:
+    row_sums = cm.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1  # avoid division by zero
+    panels_norm.append((title, cm / row_sums))
 
-### Headline Comparison
+# Short labels for axes (abbreviations only needed for x-axis tick labels)
+X_LABELS = [
+    "Band Neutrophil", "Basophil", "Blast", "Eosinophil", "Erythroblast",
+    "Giant Platelet", "Lymphocyte", "Metamyelocyte", "Monocyte", "Myelocyte",
+    "Platelet Cluster", "Reactive Lymph.", "Seg. Neutrophil",
+]
+
+Y_LABELS = [
+    "Band Neutrophil", "Basophil", "Blast", "Eosinophil", "Erythroblast",
+    "Giant Platelet", "Lymphocyte", "Metamyelocyte", "Monocyte", "Myelocyte",
+    "Platelet Cluster", "Reactive Lymph.", "Seg. Neutrophil",
+]
+
+n = len(X_LABELS)
+
+fig, axes = plt.subplots(1, 3, figsize=(7, 3.8), sharey=True)
+
+for idx, (ax, (title, cm_norm)) in enumerate(zip(axes, panels_norm)):
+    im = ax.imshow(cm_norm, vmin=0, vmax=1, cmap=CMAP_BLUES, aspect="equal")
+
+    # Annotate cells
+    for i in range(n):
+        for j in range(n):
+            val = cm_norm[i, j]
+            color = "white" if val > 0.5 else "black"
+            ax.text(j, i, f"{val:.2f}" if val > 0 else "",
+                    ha="center", va="center", fontsize=3.5, color=color)
+
+    ax.set_title(title, fontsize=7, pad=4)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(X_LABELS, rotation=45, fontsize=4.5, ha="right")
+
+    if idx == 0:
+        ax.set_yticks(range(n))
+        ax.set_yticklabels(Y_LABELS, fontsize=5)
+        ax.set_ylabel("True class", fontsize=6)
+    else:
+        ax.tick_params(axis="y", left=False)
+
+# Single shared x-axis label
+fig.text(0.5, 0.17, "Predicted", ha="center", fontsize=6)
+
+# Horizontal colourbar below the "Predicted" label
+cbar_ax = fig.add_axes([0.15, 0.05, 0.7, 0.015])
+cbar = fig.colorbar(im, cax=cbar_ax, orientation="horizontal")
+cbar.set_label("Recall", fontsize=6)
+cbar.ax.tick_params(labelsize=5)
+
+plt.subplots_adjust(left=0.15, right=0.98, bottom=0.18, top=0.93, wspace=0.08)
+plt.show()
+```
 
 ```{python}
-#| label: tbl-headline
-#| tbl-cap: "Test set performance across all models (mean +/- std over 5 seeds)."
+#| label: fig-umap
+#| fig-cap: "UMAP embeddings of test-set features (n = 5,765) in KU-Optofil dataset, coloured by cell class. (a) DinoBloom-S, (b) EfficientNet-B0, (c) ResNet-50."
 
-lp_results = json.load(open(RESULTS_DIR / "linear_probe_results.json"))
-xgb_results = json.load(open(RESULTS_DIR / "xgboost_results.json"))
+import umap
 
-# Load fine-tuning results if available
-ft_path = RESULTS_DIR / "finetune_results.json"
-ft_results = json.load(open(ft_path)) if ft_path.exists() else {}
+# ── Load test features for the three backbones ────────────────────────────
+umap_backbones = [
+    ("(a) DinoBloom-S",    "dinobloom_s"),
+    ("(b) EfficientNet-B0","efficientnet_b0"),
+    ("(c) ResNet-50",      "resnet50"),
+]
 
-rows = []
-for bb in BACKBONES:
-    for method, data in [("Linear Probe", lp_results), ("XGBoost", xgb_results), ("Fine-tuned", ft_results)]:
-        if bb not in data:
+umap_params = dict(n_neighbors=15, min_dist=0.1, metric="euclidean", random_state=42)
+
+# Class labels (alphabetical encoding matches the feature NPZs)
+UMAP_CLASS_NAMES = [
+    "Band Neutrophil", "Basophil", "Blast", "Eosinophil", "Erythroblast",
+    "Giant Platelet", "Lymphocyte", "Metamyelocyte", "Monocyte", "Myelocyte",
+    "Platelet Cluster", "Reactive Lymphocyte", "Segmented Neutrophil",
+]
+
+fig, axes = plt.subplots(1, 3, figsize=(7, 3.0))
+
+for idx, (ax, (title, backbone)) in enumerate(zip(axes, umap_backbones)):
+    feat = np.load(RESULTS_DIR / f"{backbone}_features.npz", allow_pickle=True)
+    X_test = feat["test_X"]
+    y_raw = feat["test_y"]
+    # Labels may be strings or ints — map to int indices
+    if y_raw.dtype.kind in ("U", "S", "O"):  # string types
+        from sklearn.preprocessing import LabelEncoder
+        le = LabelEncoder()
+        le.fit(sorted(set(y_raw)))
+        y_test = le.transform(y_raw)
+    else:
+        y_test = y_raw.astype(int)
+
+    reducer = umap.UMAP(**umap_params)
+    embedding = reducer.fit_transform(X_test)
+
+    for cls_idx in range(len(UMAP_CLASS_NAMES)):
+        mask = y_test == cls_idx
+        if mask.sum() == 0:
             continue
-        tr = data[bb]["test_results"]
-        rows.append({
-            "Backbone": BACKBONE_DISPLAY.get(bb, bb),
-            "Classifier": method,
-            "Macro F1": f"{tr['macro_f1_mean']:.4f} +/- {tr['macro_f1_std']:.4f}",
-            "Weighted F1": f"{tr['weighted_f1_mean']:.4f} +/- {tr['weighted_f1_std']:.4f}",
-            "Accuracy": f"{tr['accuracy_mean']:.4f} +/- {tr['accuracy_std']:.4f}",
-            "Balanced Acc": f"{tr['balanced_accuracy_mean']:.4f} +/- {tr['balanced_accuracy_std']:.4f}",
+        ax.scatter(
+            embedding[mask, 0], embedding[mask, 1],
+            color=CLASS_COLOURS[cls_idx], s=1, alpha=0.8,
+            edgecolors="none", linewidths=0,
+            label=UMAP_CLASS_NAMES[cls_idx] if idx == 0 else None,
+        )
+
+    ax.set_title(title, fontsize=7, pad=4)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlim(embedding[:, 0].min() - 1, embedding[:, 0].max() + 1)
+    ax.set_ylim(embedding[:, 1].min() - 1, embedding[:, 1].max() + 1)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+# Shared legend below all panels
+handles, labels = axes[0].get_legend_handles_labels()
+fig.legend(
+    handles, labels, loc="lower center",
+    ncol=4, fontsize=5, markerscale=4,
+    frameon=False, handletextpad=0.3, columnspacing=1.0,
+)
+
+plt.subplots_adjust(left=0.01, right=0.99, bottom=0.15, top=0.93, wspace=0.05)
+plt.show()
+```
+
+```{python}
+#| label: fig-attention
+#| fig-cap: "DinoBloom-S attention visualisations for 13 classes. Left: original image (resized to 224 × 224). Centre: PCA of patch tokens, top 3 components mapped to red, green and blue colors. Right: token-norm heatmap (brighter = higher activation)."
+
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+import torch
+import torchvision.transforms as T
+from sklearn.decomposition import PCA
+
+# Load DinoBloom-S
+from huggingface_hub import hf_hub_download
+
+model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14", verbose=False)
+ckpt_path = hf_hub_download(repo_id="MarrLab/DinoBloom", filename="pytorch_model_s.bin")
+ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+num_tokens = int(1 + (224 / 14) ** 2)
+model.pos_embed = torch.nn.Parameter(torch.zeros(1, num_tokens, 384))
+model.load_state_dict(ckpt, strict=True)
+model.eval()
+
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+model.to(device)
+
+transform = T.Compose([
+    T.Resize((224, 224)),
+    T.ToTensor(),
+    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
+# All 13 classes
+attn_classes = CLASS_ORDER
+samples = []
+for cls in attn_classes:
+    cls_df = df_meta[df_meta["cell_type"] == cls]
+    row = cls_df.sample(n=1, random_state=42).iloc[0]
+    class_folder = FOLDER_NAME_MAP[row["cell_type"]]
+    split = row["path"].split("/")[0]
+    img_path = image_root / split / class_folder / row["image_name"]
+    if img_path.exists():
+        samples.append((FULL_NAMES[cls], img_path))
+
+patch_size = 14
+grid_size = 224 // patch_size
+
+# ── 2-column layout: 7 rows left, 6 rows right ──────────────────────────
+# Each "column" has 3 sub-columns: original | PCA | token norms
+# Total grid columns: 3 (left) + gap + 3 (right) = 7
+import matplotlib.gridspec as gridspec
+
+n_left = 7
+n_right = len(samples) - n_left  # 6
+n_rows = max(n_left, n_right)
+
+fig = plt.figure(figsize=(7, 0.9 * n_rows))
+gs = gridspec.GridSpec(
+    n_rows, 7, figure=fig,
+    width_ratios=[1, 1, 1, 0.8, 1, 1, 1],
+    wspace=0, hspace=0.25,
+    left=0.01, right=0.99, top=0.95, bottom=0.01,
+)
+
+def render_sample(fig, gs_row, gs_col_offset, cls_name, img_path, show_title):
+    """Render one sample: original | PCA | token norms into 3 grid cells."""
+    img_pil = Image.open(img_path).convert("RGB")
+    img_resized = img_pil.resize((224, 224))
+    img_tensor = transform(img_pil).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        tokens = model.get_intermediate_layers(img_tensor, n=1)[0]
+        n_tokens = tokens.shape[1]
+        if n_tokens == grid_size * grid_size + 1:
+            patch_tokens = tokens[0, 1:, :].cpu().numpy()
+        else:
+            patch_tokens = tokens[0, :, :].cpu().numpy()
+
+    # PCA → RGB
+    pca = PCA(n_components=3)
+    pca_result = pca.fit_transform(patch_tokens)
+    for c in range(3):
+        mn, mx = pca_result[:, c].min(), pca_result[:, c].max()
+        if mx > mn:
+            pca_result[:, c] = (pca_result[:, c] - mn) / (mx - mn)
+    pca_image = pca_result.reshape(grid_size, grid_size, 3)
+
+    # Token norms
+    token_norms_val = np.linalg.norm(patch_tokens, axis=1)
+    norm_map = token_norms_val.reshape(grid_size, grid_size)
+    norm_map = (norm_map - norm_map.min()) / (norm_map.max() - norm_map.min() + 1e-8)
+
+    for j, (img_data, cmap, title) in enumerate([
+        (img_resized, None, "Original"),
+        (pca_image, None, "Patch PCA"),
+        (norm_map, "inferno", "Token norms"),
+    ]):
+        ax = fig.add_subplot(gs[gs_row, gs_col_offset + j])
+        if cmap:
+            ax.imshow(img_data, cmap=cmap)
+        else:
+            ax.imshow(img_data)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        if show_title:
+            ax.set_title(title, fontsize=5, pad=2)
+        if j == 0:
+            ax.set_ylabel(cls_name, fontsize=5, rotation=0, ha="right", va="center", labelpad=3)
+
+# Left column: first 7 classes
+for i in range(n_left):
+    cls_name, img_path = samples[i]
+    render_sample(fig, i, 0, cls_name, img_path, show_title=(i == 0))
+
+# Right column: remaining 6 classes
+for i in range(n_right):
+    cls_name, img_path = samples[n_left + i]
+    render_sample(fig, i, 4, cls_name, img_path, show_title=(i == 0))
+
+# Bottom-right cell is empty (6 vs 7) — leave blank
+
+plt.show()
+```
+
+```{python}
+#| label: tbl-external
+#| tbl-cap: "Classification performance on the Acevedo external validation set (6-class). XGBoost rows report mean ± SD across 5 seeds; fine-tuned models were not validated. Best values per metric are bolded."
+
+import json
+
+with open(RESULTS_DIR / "external_validation.json") as f:
+    ext = json.load(f)
+
+ext_backbones = [
+    ("DinoBloom-S (ViT)",        "dinobloom_s"),
+    ("EfficientNet-B0 (CNN)",    "efficientnet_b0"),
+    ("Handcrafted (CellPose)",   "handcrafted_cellpose"),
+    ("Handcrafted (convex hull)","handcrafted"),
+    ("ViT-S/16 (ViT)",          "vit_s16"),
+    ("ResNet-50 (CNN)",          "resnet50"),
+]
+
+def fmt_ext(val, std=None, bold=False):
+    s = f"{val:.3f}"
+    if std is not None and std > 0:
+        s += f" ± {std:.3f}"
+    if bold:
+        s = f"**{s}**"
+    return s
+
+table_rows = []
+for name, key in ext_backbones:
+    for clf_key, clf_name in [("xgboost", "XGBoost"), ("linear", "Linear probe")]:
+        seeds = ext[key][clf_key]["per_seed"]
+        mf1s = [s["macro_f1"] for s in seeds]
+        accs = [s["accuracy"] for s in seeds]
+        wf1s = [s["weighted_f1"] for s in seeds]
+        mf1_mean = np.mean(mf1s)
+        mf1_std = np.std(mf1s) if len(seeds) > 1 and clf_key == "xgboost" else None
+        table_rows.append({
+            "name": name, "classifier": clf_name,
+            "mf1": mf1_mean, "mf1_std": mf1_std,
+            "acc": np.mean(accs), "wf1": np.mean(wf1s),
         })
 
-pd.DataFrame(rows)
+best_mf1 = max(r["mf1"] for r in table_rows)
+best_acc = max(r["acc"] for r in table_rows)
+best_wf1 = max(r["wf1"] for r in table_rows)
+
+header = "| Feature source | Classifier | Macro F1 | Accuracy | Weighted F1 |"
+sep =    "|:---|:---|:---:|:---:|:---:|"
+lines = [header, sep]
+
+prev_name = None
+for r in table_rows:
+    display_name = r["name"] if r["name"] != prev_name else ""
+    prev_name = r["name"]
+    cols = [
+        display_name,
+        r["classifier"],
+        fmt_ext(r["mf1"], r["mf1_std"], r["mf1"] == best_mf1),
+        fmt_ext(r["acc"], bold=r["acc"] == best_acc),
+        fmt_ext(r["wf1"], bold=r["wf1"] == best_wf1),
+    ]
+    lines.append("| " + " | ".join(cols) + " |")
+
+from IPython.display import Markdown
+Markdown("\n".join(lines))
 ```
 
-### Per-Class Performance
-
 ```{python}
-#| label: fig-perclass-f1
-#| fig-cap: "Per-class F1 scores for each backbone-classifier combination."
+#| label: fig-external-confusion
+#| fig-cap: "External validation confusion matrices on the Acevedo dataset (6-class). (a) DinoBloom-S with XGBoost. (b) ResNet-50 with XGBoost. Values are row-normalised."
 
-# Build per-class F1 dataframe from classification reports
-rows = []
-for bb in BACKBONES:
-    for method, data in [("Linear Probe", lp_results), ("XGBoost", xgb_results), ("Fine-tuned", ft_results)]:
-        if bb not in data:
-            continue
-        report = data[bb]["test_results"]["classification_report"]
-        for cls in CLASS_ORDER_ALPHA:
-            if cls in report:
-                rows.append({
-                    "Class": CLASS_LABELS.get(cls, cls),
-                    "Backbone": BACKBONE_DISPLAY.get(bb, bb),
-                    "Classifier": method,
-                    "F1": report[cls]["f1-score"],
-                })
+import json
 
-df = pd.DataFrame(rows)
+with open(RESULTS_DIR / "external_validation.json") as f:
+    ext = json.load(f)
 
-if not df.empty:
-    pivot = df.pivot_table(index="Class", columns=["Backbone", "Classifier"], values="F1")
-    fig, ax = plt.subplots(figsize=(12, 6))
-    pivot.plot(kind="barh", ax=ax)
-    style_axis(ax)
-    ax.set_xlabel("F1 Score")
-    ax.set_title("Per-Class F1 by Backbone and Classifier")
-    ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left", fontsize=8)
-    plt.tight_layout()
-    plt.show()
-```
+ext_panels = [
+    ("(a) DinoBloom-S — XGBoost", np.array(ext["dinobloom_s"]["xgboost"]["confusion_matrix"])),
+    ("(b) ResNet-50 — XGBoost",   np.array(ext["resnet50"]["xgboost"]["confusion_matrix"])),
+]
 
-### Confusion Matrices
+# Row-normalise
+ext_panels_norm = []
+for title, cm in ext_panels:
+    row_sums = cm.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1
+    ext_panels_norm.append((title, cm / row_sums))
 
-```{python}
-#| label: fig-confusion-matrices
-#| fig-cap: "Confusion matrices for the best-performing configuration per backbone (XGBoost, median seed)."
+EXT_LABELS = [
+    "Basophil", "Eosinophil", "Erythroblast",
+    "Lymphocyte", "Monocyte", "Seg. Neutrophil",
+]
 
-from matplotlib.colors import LogNorm
+n = len(EXT_LABELS)
 
-fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+fig, axes = plt.subplots(1, 2, figsize=(7, 3.5), sharey=True)
 
-for ax, bb in zip(axes, BACKBONES):
-    if bb not in xgb_results:
-        continue
-    cm = np.array(xgb_results[bb]["test_results"]["confusion_matrix"])
-    # Normalise by row (true class)
-    cm_norm = cm.astype(float) / cm.sum(axis=1, keepdims=True)
+for idx, (ax, (title, cm_norm)) in enumerate(zip(axes, ext_panels_norm)):
+    im = ax.imshow(cm_norm, vmin=0, vmax=1, cmap=CMAP_BLUES, aspect="equal")
 
-    im = ax.imshow(cm_norm, cmap="Blues", vmin=0, vmax=1)
-    ax.set_title(BACKBONE_DISPLAY.get(bb, bb))
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("True")
+    for i in range(n):
+        for j in range(n):
+            val = cm_norm[i, j]
+            color = "white" if val > 0.5 else "black"
+            ax.text(j, i, f"{val:.2f}" if val > 0 else "",
+                    ha="center", va="center", fontsize=7, color=color)
 
-    labels = [CLASS_LABELS.get(c, c) for c in CLASS_ORDER_ALPHA]
-    ax.set_xticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=90, fontsize=7)
-    ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels, fontsize=7)
+    ax.set_title(title, fontsize=8, pad=4)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(EXT_LABELS, rotation=45, fontsize=6.5, ha="right")
 
-fig.colorbar(im, ax=axes, shrink=0.6, label="Recall (row-normalised)")
-plt.tight_layout()
+    if idx == 0:
+        ax.set_yticks(range(n))
+        ax.set_yticklabels(EXT_LABELS, fontsize=6.5)
+        ax.set_ylabel("True class", fontsize=7)
+    else:
+        ax.tick_params(axis="y", left=False)
+
+fig.text(0.45, 0.02, "Predicted", ha="center", fontsize=7)
+
+# Vertical colourbar on the right
+cbar_ax = fig.add_axes([0.92, 0.22, 0.015, 0.65])
+cbar = fig.colorbar(im, cax=cbar_ax, orientation="vertical")
+cbar.set_label("Recall", fontsize=7)
+cbar.ax.tick_params(labelsize=6)
+
+plt.subplots_adjust(left=0.15, right=0.90, bottom=0.22, top=0.92, wspace=0.08)
 plt.show()
 ```
 
-### Optuna Convergence
-
 ```{python}
-#| label: fig-optuna
-#| fig-cap: "Optuna TPE convergence plots for XGBoost HP tuning."
+#| label: fig-segmentation
+#| fig-cap: "Segmentation method impacts handcrafted feature performance and importance. (a, b) External validation confusion matrices (row-normalised) on the Acevedo dataset (6-class, XGBoost) for CellPose and convex hull segmentation. (c, d) SHAP feature importance (mean |SHAP| across all classes) for the top 10 features in the KU-Optofil internal test set (13-class, XGBoost, subsample of 1,000) for CellPose and convex hull segmentation. Nuc. = nucleus, Cyt. = cytoplasm, GLCM = grey-level co-occurrence matrix. Ratios all refer to colour ratios of mean or standard deviation (std), and use the whole cell as the denominator, brackets denote the color channel and colour space. (Cr) = red chrominance in YCrCb colour space; (a*) = green-red in LAB colour space, (B) = blue, (R) = red in RGB colour space."
 
-fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+import json
+from PIL import Image as PILImage
 
-for ax, bb in zip(axes, BACKBONES):
-    img_path = RESULTS_DIR / f"optuna_history_{bb}.png"
-    if img_path.exists():
-        img = Image.open(img_path)
-        ax.imshow(img)
-    ax.set_title(BACKBONE_DISPLAY.get(bb, bb))
-    ax.axis("off")
+with open(RESULTS_DIR / "external_validation.json") as f:
+    ext = json.load(f)
 
-plt.tight_layout()
+# ── Top row: confusion matrices ──────────────────────────────────────────
+seg_panels = [
+    ("(a) CellPose — XGBoost (ext.)",  np.array(ext["handcrafted_cellpose"]["xgboost"]["confusion_matrix"])),
+    ("(b) Convex hull — XGBoost (ext.)", np.array(ext["handcrafted"]["xgboost"]["confusion_matrix"])),
+]
+
+seg_panels_norm = []
+for title, cm in seg_panels:
+    row_sums = cm.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1
+    seg_panels_norm.append((title, cm / row_sums))
+
+EXT_LABELS = [
+    "Basophil", "Eosinophil", "Erythroblast",
+    "Lymphocyte", "Monocyte", "Seg. Neutrophil",
+]
+
+n = len(EXT_LABELS)
+
+fig = plt.figure(figsize=(7, 7.5))
+
+# Top row: confusion matrices
+ax_cm = [fig.add_axes([0.10, 0.54, 0.35, 0.38]),
+         fig.add_axes([0.50, 0.54, 0.35, 0.38])]
+
+for idx, (ax, (title, cm_norm)) in enumerate(zip(ax_cm, seg_panels_norm)):
+    im = ax.imshow(cm_norm, vmin=0, vmax=1, cmap=CMAP_BLUES, aspect="equal")
+
+    for i in range(n):
+        for j in range(n):
+            val = cm_norm[i, j]
+            color = "white" if val > 0.5 else "black"
+            ax.text(j, i, f"{val:.2f}" if val > 0 else "",
+                    ha="center", va="center", fontsize=6.5, color=color)
+
+    ax.set_title(title, fontsize=7, pad=4)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(EXT_LABELS, rotation=45, fontsize=6, ha="right")
+
+    if idx == 0:
+        ax.set_yticks(range(n))
+        ax.set_yticklabels(EXT_LABELS, fontsize=6)
+        ax.set_ylabel("True class", fontsize=7)
+    else:
+        ax.set_yticks(range(n))
+        ax.set_yticklabels([])
+        ax.tick_params(axis="y", left=False)
+
+# Vertical colourbar on the right
+cbar_ax = fig.add_axes([0.88, 0.58, 0.015, 0.30])
+cbar = fig.colorbar(im, cax=cbar_ax, orientation="vertical")
+cbar.set_label("Recall", fontsize=6)
+cbar.ax.tick_params(labelsize=5)
+
+fig.text(0.45, 0.52, "Predicted", ha="center", fontsize=7)
+
+# ── Bottom row: SHAP bar plots (live from CSVs) ─────────────────────────
+FEATURE_DISPLAY = {
+    # Nucleus GLCM texture
+    "nuc_glcm_homogeneity": "Nuc. GLCM homogeneity",
+    "nuc_glcm_contrast": "Nuc. GLCM contrast",
+    "nuc_glcm_correlation": "Nuc. GLCM correlation",
+    "nuc_glcm_energy": "Nuc. GLCM energy",
+    "nuc_glcm_entropy": "Nuc. GLCM entropy",
+    # Cytoplasm GLCM texture
+    "cyt_glcm_homogeneity": "Cyt. GLCM homogeneity",
+    "cyt_glcm_contrast": "Cyt. GLCM contrast",
+    "cyt_glcm_correlation": "Cyt. GLCM correlation",
+    "cyt_glcm_energy": "Cyt. GLCM energy",
+    "cyt_glcm_entropy": "Cyt. GLCM entropy",
+    # Shape
+    "solidity": "Nuc. solidity",
+    "convexity": "Nuc. convexity",
+    "circularity": "Nuc. circularity",
+    "nuc_eccentricity": "Nuc. eccentricity",
+    "nuc_extent": "Nuc. extent",
+    "nc_ratio": "N:C ratio",
+    "lobe_count": "Lobe count",
+    # Nucleus colour ratios (nucleus / cell)
+    "ncl_cvx_mean_R": "Nuc. mean ratio (R)",
+    "ncl_cvx_mean_G": "Nuc. mean ratio (G)",
+    "ncl_cvx_mean_B": "Nuc. mean ratio (B)",
+    "ncl_cvx_mean_H": "Nuc. mean ratio (H)",
+    "ncl_cvx_mean_S": "Nuc. mean ratio (S)",
+    "ncl_cvx_mean_V": "Nuc. mean ratio (V)",
+    "ncl_cvx_mean_L": "Nuc. mean ratio (L)",
+    "ncl_cvx_mean_A": "Nuc. mean ratio (a*)",
+    "ncl_cvx_mean_Blab": "Nuc. mean ratio (b*)",
+    "ncl_cvx_mean_Y": "Nuc. mean ratio (Y)",
+    "ncl_cvx_mean_Cr": "Nuc. mean ratio (Cr)",
+    "ncl_cvx_mean_Cb": "Nuc. mean ratio (Cb)",
+    "ncl_cvx_std_R": "Nuc. std ratio (R)",
+    "ncl_cvx_std_G": "Nuc. std ratio (G)",
+    "ncl_cvx_std_B": "Nuc. std ratio (B)",
+    "ncl_cvx_std_H": "Nuc. std ratio (H)",
+    "ncl_cvx_std_S": "Nuc. std ratio (S)",
+    "ncl_cvx_std_V": "Nuc. std ratio (V)",
+    "ncl_cvx_std_L": "Nuc. std ratio (L)",
+    "ncl_cvx_std_A": "Nuc. std ratio (a*)",
+    "ncl_cvx_std_Blab": "Nuc. std ratio (b*)",
+    "ncl_cvx_std_Y": "Nuc. std ratio (Y)",
+    "ncl_cvx_std_Cr": "Nuc. std ratio (Cr)",
+    "ncl_cvx_std_Cb": "Nuc. std ratio (Cb)",
+    # Cytoplasm colour ratios (cytoplasm / cell)
+    "roc_cvx_mean_R": "Cyt. mean ratio (R)",
+    "roc_cvx_mean_G": "Cyt. mean ratio (G)",
+    "roc_cvx_mean_B": "Cyt. mean ratio (B)",
+    "roc_cvx_mean_H": "Cyt. mean ratio (H)",
+    "roc_cvx_mean_S": "Cyt. mean ratio (S)",
+    "roc_cvx_mean_V": "Cyt. mean ratio (V)",
+    "roc_cvx_mean_L": "Cyt. mean ratio (L)",
+    "roc_cvx_mean_A": "Cyt. mean ratio (a*)",
+    "roc_cvx_mean_Blab": "Cyt. mean ratio (b*)",
+    "roc_cvx_mean_Y": "Cyt. mean ratio (Y)",
+    "roc_cvx_mean_Cr": "Cyt. mean ratio (Cr)",
+    "roc_cvx_mean_Cb": "Cyt. mean ratio (Cb)",
+    "roc_cvx_std_R": "Cyt. std ratio (R)",
+    "roc_cvx_std_G": "Cyt. std ratio (G)",
+    "roc_cvx_std_B": "Cyt. std ratio (B)",
+    "roc_cvx_std_H": "Cyt. std ratio (H)",
+    "roc_cvx_std_S": "Cyt. std ratio (S)",
+    "roc_cvx_std_V": "Cyt. std ratio (V)",
+    "roc_cvx_std_L": "Cyt. std ratio (L)",
+    "roc_cvx_std_A": "Cyt. std ratio (a*)",
+    "roc_cvx_std_Blab": "Cyt. std ratio (b*)",
+    "roc_cvx_std_Y": "Cyt. std ratio (Y)",
+    "roc_cvx_std_Cr": "Cyt. std ratio (Cr)",
+    "roc_cvx_std_Cb": "Cyt. std ratio (Cb)",
+}
+
+TOP_N = 10
+
+shap_cp = pd.read_csv(RESULTS_DIR / "shap_importance_handcrafted_cellpose.csv").head(TOP_N)
+shap_cv = pd.read_csv(RESULTS_DIR / "shap_importance_handcrafted.csv").head(TOP_N)
+
+ax_shap_l = fig.add_axes([0.12, 0.04, 0.34, 0.42])
+ax_shap_r = fig.add_axes([0.60, 0.04, 0.34, 0.42])
+
+for ax, df, label in [
+    (ax_shap_l, shap_cp, "(c) CellPose SHAP — top 10 features"),
+    (ax_shap_r, shap_cv, "(d) Convex hull SHAP — top 10 features"),
+]:
+    names = [FEATURE_DISPLAY.get(f, f) for f in reversed(df["feature"].tolist())]
+    vals = list(reversed(df["mean_abs_shap"].tolist()))
+    ax.barh(range(len(names)), vals, color=OI_BLUE, height=0.7)
+    ax.set_yticks(range(len(names)))
+    ax.set_yticklabels(names, fontsize=5.5)
+    ax.set_xlabel("Mean |SHAP value|", fontsize=6)
+    ax.tick_params(axis="x", labelsize=5.5)
+    ax.set_title(label, fontsize=7, pad=4)
+
 plt.show()
 ```
 
-### Training Curves (Fine-Tuning)
+# Discussion
 
-```{python}
-#| label: fig-training-curves
-#| fig-cap: "Training loss and validation macro F1 over epochs for the best Optuna trial per backbone."
-
-# TODO: extract training history from fine-tuning results once available
-# ft_results[backbone]["training_history"] would contain per-epoch data
-```
-
-## Discussion
+## Ethical Considerations
 
 
-## References
+# References {.unnumbered}
 
 ::: {#refs}
 :::
+
+{{< pagebreak >}}
+
+# Appendix {.unnumbered}
+
+```{python}
+#| label: fig-segmentation-comparison
+#| fig-cap: "Cell segmentation comparison for six representative cell types. Each row shows (left to right): the original image; nucleus mask from multi-Otsu thresholding (white); convex hull cell boundary (green outline — the convex envelope of the nucleus); and CellPose cell boundary (green outline)."
+
+from segmentation import segment_nucleus, cell_mask_convex_hull
+import cv2
+
+# Pick one representative image per class (diverse morphologies)
+seg_classes = ["eosinophil", "lymphocyte", "monocyte", "blast", "segmented_neutrophil", "erythroblast"]
+
+seg_samples = []
+for cls in seg_classes:
+    cls_df = df_meta[df_meta["cell_type"] == cls]
+    row = cls_df.sample(n=1, random_state=42).iloc[0]
+    class_folder = FOLDER_NAME_MAP[row["cell_type"]]
+    split = row["path"].split("/")[0]
+    img_path = image_root / split / class_folder / row["image_name"]
+    if img_path.exists():
+        seg_samples.append((FULL_NAMES[cls], row["image_name"], img_path))
+
+n_samples = len(seg_samples)
+fig, axes = plt.subplots(n_samples, 4, figsize=(7, 1.6 * n_samples))
+
+for row_idx, (cls_name, img_name, img_path) in enumerate(seg_samples):
+    img = cv2.imread(str(img_path))
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    # Nucleus segmentation (same for both methods)
+    nuc_mask, _ = segment_nucleus(img_rgb)
+
+    # Convex hull cell mask
+    cvx_mask = cell_mask_convex_hull(nuc_mask)
+
+    # CellPose mask
+    cp_path = RESULTS_DIR / "cellpose_masks" / f"{img_name}.png"
+    if cp_path.exists():
+        cp_mask = np.array(Image.open(cp_path).convert("L")) > 0
+    else:
+        cp_mask = cvx_mask  # fallback
+
+    # Column 0: original
+    axes[row_idx, 0].imshow(img_rgb)
+    axes[row_idx, 0].set_ylabel(cls_name, fontsize=6, rotation=0, ha="right", va="center", labelpad=3)
+
+    # Column 1: nucleus mask overlay
+    overlay_nuc = img_rgb.copy()
+    overlay_nuc[nuc_mask > 0] = (overlay_nuc[nuc_mask > 0] * 0.5 + np.array([255, 255, 255]) * 0.5).astype(np.uint8)
+    axes[row_idx, 1].imshow(overlay_nuc)
+
+    # Column 2: convex hull outline
+    overlay_cvx = img_rgb.copy()
+    cvx_contours, _ = cv2.findContours(cvx_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(overlay_cvx, cvx_contours, -1, (0, 200, 0), 2)
+    nuc_contours, _ = cv2.findContours(nuc_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(overlay_cvx, nuc_contours, -1, (255, 255, 255), 1)
+    axes[row_idx, 2].imshow(overlay_cvx)
+
+    # Column 3: CellPose outline
+    overlay_cp = img_rgb.copy()
+    cp_contours, _ = cv2.findContours(cp_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(overlay_cp, cp_contours, -1, (0, 200, 0), 2)
+    cv2.drawContours(overlay_cp, nuc_contours, -1, (255, 255, 255), 1)
+    axes[row_idx, 3].imshow(overlay_cp)
+
+    for col in range(4):
+        axes[row_idx, col].set_xticks([])
+        axes[row_idx, col].set_yticks([])
+        for spine in axes[row_idx, col].spines.values():
+            spine.set_visible(False)
+
+# Column titles
+for col, title in enumerate(["Original", "Nucleus mask", "Convex hull", "CellPose"]):
+    axes[0, col].set_title(title, fontsize=7, pad=4)
+
+plt.subplots_adjust(left=0.15, right=0.98, bottom=0.01, top=0.95, wspace=0.05, hspace=0.15)
+plt.show()
+```
