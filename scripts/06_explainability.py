@@ -211,6 +211,18 @@ def plot_shap(
     fig, ax = plt.subplots(figsize=(8, 6))
     mean_abs_shap = np.mean([np.abs(sv).mean(axis=0) for sv in shap_values], axis=0)
 
+    # Save raw mean |SHAP| per feature to CSV for report rendering
+    import csv
+    shap_rows = sorted(
+        [(_label(i), float(mean_abs_shap[i])) for i in range(len(mean_abs_shap))],
+        key=lambda r: r[1], reverse=True,
+    )
+    with open(results_dir / f"shap_importance_{backbone}.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["feature", "mean_abs_shap"])
+        w.writerows(shap_rows)
+    print(f"  Saved shap_importance_{backbone}.csv")
+
     # Top features
     top_idx = np.argsort(mean_abs_shap)[-max_display:]
     ax.barh(range(len(top_idx)), mean_abs_shap[top_idx], color=COLOURS["secondary"])
