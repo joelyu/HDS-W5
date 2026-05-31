@@ -57,6 +57,8 @@ from config import (
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+# Only backbones with build_model / configure_freezing support.
+FINETUNE_BACKBONES = ["resnet50", "efficientnet_b0", "dinobloom_s", "vit_s16"]
 
 
 # ── Transforms ─────────────────────────────────────────────────────────────
@@ -120,6 +122,13 @@ def build_model(backbone_name: str, dropout: float = 0.3) -> nn.Module:
         model.classifier = nn.Sequential(nn.Dropout(dropout), nn.Linear(1280, NUM_CLASSES))
         return model
 
+    if backbone_name == "vit_s16":
+        import timm
+
+        model = timm.create_model("vit_small_patch16_224", pretrained=True)
+        model.head = nn.Sequential(nn.Dropout(dropout), nn.Linear(384, NUM_CLASSES))
+        return model
+
     if backbone_name == "dinobloom_s":
         from huggingface_hub import hf_hub_download
 
@@ -154,7 +163,7 @@ def configure_freezing(model: nn.Module, backbone_name: str, unfreeze: str) -> N
         elif backbone_name == "efficientnet_b0":
             for p in model.features[-1].parameters():
                 p.requires_grad = True
-        elif backbone_name == "dinobloom_s":
+        elif backbone_name in ("dinobloom_s", "vit_s16"):
             for p in model.blocks[-1].parameters():
                 p.requires_grad = True
 
@@ -165,7 +174,7 @@ def configure_freezing(model: nn.Module, backbone_name: str, unfreeze: str) -> N
     elif backbone_name == "efficientnet_b0":
         for p in model.classifier.parameters():
             p.requires_grad = True
-    elif backbone_name == "dinobloom_s":
+    elif backbone_name in ("dinobloom_s", "vit_s16"):
         for p in model.head.parameters():
             p.requires_grad = True
 
@@ -503,8 +512,8 @@ def parse_args() -> argparse.Namespace:
         default=Path(__file__).resolve().parent.parent / "results",
     )
     parser.add_argument(
-        "--backbone", choices=BACKBONES, default=None,
-        help="Fine-tune a single backbone (default: all three).",
+        "--backbone", choices=FINETUNE_BACKBONES, default=None,
+        help="Fine-tune a single backbone (default: all four).",
     )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--n-trials", type=int, default=30)
@@ -563,7 +572,7 @@ def main() -> int:
     print(f"  Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)}")
     print()
 
-    backbones_to_run = [args.backbone] if args.backbone else BACKBONES
+    backbones_to_run = [args.backbone] if args.backbone else FINETUNE_BACKBONES
     all_results = {}
 
     for backbone in backbones_to_run:
