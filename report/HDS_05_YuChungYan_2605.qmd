@@ -82,7 +82,7 @@ For each of the questions, do not spend too long answering -- keep it brief. For
 
 # Introduction
 
-The classification of peripheral blood cells is a fundamental task in haematology, and the starting diagnostic step of 80% of haematological diseases [@acevedo2019recognition]. Manual classification methods that are prone to inter-observer variability [@fan2024microscope; @schelonka1995differentiation] have been gradually replaced by automated methods with the advent of classical and deep machine learning, with different approaches and philosophies emerging. One approach is radiomics inspired, relying on classical computer vision to engineer handcrafted features guided by haematological expertise [@tavakoli2021new], often with the benefit of requiring comparatively less computational resources that is well-suited for low resource settings. A second approach is leveraging pretrained models as backbones, including convolutional neural networks (CNNs) and vision transformers (ViTs), to extract learned features that can be fed into classifiers [@acevedo2019recognition], with this paradigm further expanding with the emergence of domain-specific foundational models such as DinoBloom [@koch2024dinobloom]. Finally, there is the end-to-end fine-tuning approach that optimises the entire model for blood cell classification [@asghar2024classification], a method requiring substantial computational resources from graphics processing units (GPUs). 
+The classification of peripheral blood cells is a fundamental task in haematology, and the starting diagnostic step of 80% of haematological diseases [@acevedo2019recognition]. Manual classification methods that are prone to inter-observer variability [@fan2024microscope; @schelonka1995differentiation] have been gradually replaced by automated methods with the advent of classical and deep machine learning. One approach is radiomics inspired, relying on classical computer vision to engineer handcrafted features guided by haematological expertise [@tavakoli2021new], often requiring fewer computational resources. A second approach is leveraging pretrained models as backbones, including convolutional neural networks (CNNs) and vision transformers (ViTs), to extract learned features that can be fed into classifiers [@acevedo2019recognition], with this paradigm further expanding with the emergence of domain-specific foundational models such as DinoBloom [@koch2024dinobloom]. Finally, there is the end-to-end fine-tuning approach that optimises the entire model for blood cell classification [@asghar2024classification], a method requiring substantial computational resources from graphics processing units (GPUs). 
 
 Commercial automated analysers are available, but their high cost and closed-source nature limit their accessibility, particularly in low-resource settings [@fan2024microscope; @kratz2019digital]. With nearly half (47%) of the world population lacking access to diagnostics [@fleming2021lancet], there is a need for affordable, open-source solutions regardless of the technological approach. This study compares the three abovementioned approaches on the recently released KU-Optofil dataset [@yarikan2026largescale], evaluating their performance and trade-offs, and validating the models on an external dataset from another centre [@acevedo2020dataset]. 
 
@@ -279,11 +279,11 @@ plt.show()
 
 ## Feature Extraction and Classification
 
-Four pretrained deep learning models were used as feature extractors. Two CNNs, ResNet-50 (2048 dimensions) and EfficientNet-B0 (1280 dimensions) were chosen as baseline general-purpose informed feature extractors. DinoBloom-S (384 dimensions), a ViT-based foundational model self-supervised on haematological images [@koch2024dinobloom] was chosen as the domain-informed feature extractor. Finally, to provide a non-domain specific ViT baseline, the ViT-S/16 (384 dimensions) of the same ViT family as DinoBloom-S was used. All images were resized to 224 × 224 pixels and normalised with ImageNet statistics.
+Four pretrained deep learning models were used as feature extractors. Two CNNs, ResNet-50 (2048 dimensions) and EfficientNet-B0 (1280 dimensions), served as general-purpose baselines. DinoBloom-S (384 dimensions), a ViT-based foundational model self-supervised on haematological images [@koch2024dinobloom], provided domain-specific features. ViT-S/16 (384 dimensions), from the same ViT family as DinoBloom-S, served as a non-domain ViT baseline. All images were resized to 224 × 224 pixels and normalised with ImageNet statistics.
 
-To create handcrafted features, 65 morphological features were engineered based on existing literature [@tavakoli2021new; @dasariraju2020detection]. These features were created using the ratios in sizes, colours and textures (grey level co-occurrence matrix: GLCM) between cell, cytoplasm and the nucleus, along with shape metrics such as circularity and solidity. To obtain these ratios, the nucleus and the cell both required segmentation. The nucleus was segmented using the same multi-Otsu thresholding method throughout, while the cell was segmented using two approaches: the convex hull of the nucleus [@tavakoli2021new] and the CellPose SAM model [@pachitariu2025cellpose]. Both approaches were used as the convex hull method is computationally cheaper but could provide a coarser segmentation of the cell, while the CellPose SAM model is more computationally expensive but could provide more accurate cell segmentation. This created two models with handcrafted features, which along with four pretrained backbone models, were fed into the same classifiers below for direct comparisons of the feature extraction methods.
+To create handcrafted features, 65 morphological features were engineered based on existing literature [@tavakoli2021new; @dasariraju2020detection]. These features were created using the ratios in sizes, colours and textures (grey level co-occurrence matrix: GLCM) between cell, cytoplasm and the nucleus, along with shape metrics such as circularity and solidity. To obtain these ratios, the nucleus and the cell both required segmentation ([@fig-segmentation-comparison]). The nucleus was segmented using the same multi-Otsu thresholding method throughout, while the cell was segmented using two approaches: the convex hull of the nucleus [@tavakoli2021new] and the CellPose SAM model [@pachitariu2025cellpose]. Both approaches were compared to assess the effect of segmentation quality on downstream classification.
 
-Two classifiers were used on the features generated by the abovementioned feature extractors: XGBoost using Optuna [@akiba2019optuna] via the tree-structured Parzen Estimator (TPE) to tune nine hyperparameters with 100 trials; linear probe using logistic regression with L2 regularisation. XGBoost was chosen for its native multiclass support, ability to learn non-linear interactions and CPU-computation support; linear probe is used as a baseline. Another two models were fine-tuned end-to-end using the ResNet-50 and EfficientNet-B0 backbones, using Optuna with TPE again for 30 trials with HyperbandPruner for hyperparameter tuning, with a maximum of 50 epochs and early stopping. All three approaches are visualised in the [@fig-pipeline] flowchart.
+Two classifiers were used on the features generated by the abovementioned feature extractors: XGBoost using Optuna [@akiba2019optuna] via the tree-structured Parzen Estimator (TPE) to tune nine hyperparameters with 100 trials; linear probe using logistic regression with L2 regularisation. XGBoost captures non-linear feature interactions; linear probe serves as a baseline. Another two models were fine-tuned end-to-end using the ResNet-50 and EfficientNet-B0 backbones, using Optuna with TPE again for 30 trials with HyperbandPruner for hyperparameter tuning, with a maximum of 50 epochs and early stopping. All three approaches are visualised in the [@fig-pipeline] flowchart.
 
 To account for the class imbalance within the dataset, all classifiers used inverse-frequency class weighting to ensure consistent handling of this severe imbalance across all paradigms, and the macro F1 score was used as the optimisation metric for all hyperparameter tuning.
 
@@ -295,15 +295,19 @@ An [external dataset](https://data.mendeley.com/datasets/snkd93bnjr/1) from Acev
 
 ## Reproducibility and Hardware
 
-The code for this project is available on GitHub in this [repository](https://github.com/joelyu/HDS-W5.git). Package versions are listed in `requirements.txt`. An anaconda environment can be created with `conda env create -f environment.yml` as well, and the `run_all.sh` script can be used to run all scripts in the correct order. Datasets and model weights are auto-downloaded via scripts from Zenodo, Mendeley, Hugging Face and torchvision.
+The code for this project is available on GitHub in this [repository](https://github.com/joelyu/HDS-W5.git). Package versions are listed in `requirements.txt`. The `run_all.sh` script reproduces the full pipeline. Datasets and model weights are auto-downloaded via scripts from Zenodo, Mendeley, Hugging Face and torchvision.
 
 All models except the fine-tuned models were trained on an M4 Max Mac Studio with 14-core CPU, 32-core GPU, 36GB RAM. The fine-tuned models were trained on the University of Cambridge CSD3 cluster on NVIDIA A100 GPUs, with a 12-hour wall-time limit.
 
 # Results
 
+@tbl-main presents the classification performance of all models on the KU-Optofil test set. DinoBloom-S achieved the highest macro F1 (0.710 ± 0.007 with XGBoost, 0.705 with linear probe), with insignificant bootstrapped Δ macro F1 (95% CI crosses 0), indicating no significant advantage provided by the nonlinear XGBoost classifier on balanced performance. McNemar's test was however significant (Holm-adjusted p < 0.001), reflecting XGBoost's higher per-image accuracy on majority classes that macro F1 downweighs. DinoBloom-S also significantly outperformed all other models on bootstrapped Δ macro F1 (95% CIs all exclude 0). However, McNemar's tests were insignificant when pitted against both EfficientNet-B0 (p = 0.186) and handcrafted CellPose (p = 0.177), indicating DinoBloom-S's advantage lies in rare classes rather than the majority classes. That DinoBloom-S significantly outperformed ViT-S/16 (Holm-adjusted p < 0.001), a model sharing the same ViT architecture, suggests the importance of domain-specific pretraining. 
+
+End-to-end fine-tuning of ResNet-50 and EfficientNet-B0 led to comparable macro F1 scores (~ 0.720), but each took 6 and 7 hours respectively to train on A100 GPUs, compared to 10.5 minutes for DinoBloom-S with XGBoost on consumer-grade hardware, a ~40X difference. Fine-tuning attempts were also made for ViT-S/16 and DinoBloom-S, but were unsuccessful due to exceeding the maximum wall time of 12 hours. Thus DinoBloom-S with XGBoost was able to deliver near fine-tuned performance with a fraction of the computational resources.
+
 ```{python}
 #| label: tbl-main
-#| tbl-cap: "Classification performance on the KU-Optofil test set (13-class). XGBoost and end-to-end fine-tuned models report mean ± SD across 5 seeds. Best results for each metric are bolded."
+#| tbl-cap: "Classification performance on the KU-Optofil test set (13-class). XGBoost and end-to-end fine-tuned models report macro F1 mean ± STD across 5 seeds; mean shown for weighted F1 and accuracy only as STD were all below 0.002. Best results among pretrained models are bold; fine-tuned models shown for comparison."
 
 import json
 
@@ -392,6 +396,8 @@ from IPython.display import Markdown
 Markdown("\n".join(lines))
 ```
 
+On a per-class level, the confusion matrices in [@fig-confusion] show that band neutrophils were frequently misclassified as segmented neutrophils across all models, consistent with the low Cohen's κ (0.85) from the dataset's haematologists themselves. However, segmented neutrophils recall remained extremely high. Myelocyte recall was poor across all models, as it is the rarest class (n=98, 0.3%). ResNet-50 completely failed to recall any band neutrophils, with an overall much weaker diagonal that is consistent with its lower macro F1. DinoBloom-S maintained measurable recall across all 13 classes, shining in certain rare classes such as metamyelocytes (n=262, 0.8%) and platelet clusters (n=188, 0.6%). 
+
 ```{python}
 #| label: fig-confusion
 #| fig-cap: "Test assessment confusion matrix on the KU-Optofil dataset, values are row-normalised. (a) DinoBloom-S with XGBoost, (b) DinoBloom-S with linear probe, (c) ResNet-50 with XGBoost."
@@ -468,6 +474,8 @@ cbar.ax.tick_params(labelsize=5)
 plt.subplots_adjust(left=0.15, right=0.98, bottom=0.18, top=0.93, wspace=0.08)
 plt.show()
 ```
+
+To understand the feature space of the pretrained models, [@fig-umap] visualises the UMAP embeddings of their features. DinoBloom-S produced well-separated clusters for most classes, while EfficientNet-B0 showed general separation but with several classes still overlapping. ResNet-50's features lacked separation, showing more as an amorphous cloud that is again consistent with its lower macro F1. Further scrutinising where the DinoBloom-S model was attending to, [@fig-attention] shows clear separation of the target cell in the center, the background, and neighbouring cells in the PCA of patch tokens. Even the nucleus and cytoplasm showed some degree of separation. The token norm heatmap presents a more complicated picture, with the attention often focused on neighbouring cells and the background rather than the target cell itself. However, there is still some level of separation between the nucleus of the target cell and the cytoplasm. This suggests that differentiating between the nucleus and cytoplasm could play a role in DinoBloom-S's performance. Yet, that the model attends to the background raises the possibility of learning scanner-specific artefacts.
 
 ```{python}
 #| label: fig-umap
@@ -666,9 +674,13 @@ for i in range(n_right):
 plt.show()
 ```
 
+When validated with the Acevedo dataset[@acevedo2020dataset] (6-class), [@tbl-external] shows DinoBloom-S kept its edge over other models (XGBoost macro F1 = 0.919, linear probe macro F1 = 0.908), with higher absolute macro F1 than on KU-Optofil, while the rankings of the other models shifted compared to [@tbl-main]. These higher scores are not directly comparable, as the external set has fewer than half the classes. Digging deeper on per-class performance in [@fig-external-confusion], the erythroblast class saw a notable drop in recall for all models. This may reflect sensitivity of erythroblast morphology to scanner variations (Sysmex DI-60 vs CellaVision DM96). 
+
+The unexpected finding during external validation was the effect of cell segmentation on handcrafted features ([@tbl-external]). On KU-Optofil, CellPose and convex hull segmentation performed similarly (|Δ macro F1| < 0.001, bootstrap CI crosses 0), but on the Acevedo dataset CellPose outperformed convex hull by +0.16 macro F1 (0.788 vs 0.629), with a stronger diagonal in [@fig-segmentation] (a, b). SHAP analysis ([@fig-segmentation] c, d) shows that both approaches shared nucleus GLCM texture features in their top 10, as expected given identical nucleus segmentation. The difference is that convex hull leaned more on cytoplasm-to-cell colour ratios (a*, Cr, B), while CellPose leaned more on nucleus-to-cell colour ratios and shape features such as solidity. This could be due to the convex hull of the nucleus underestimating the true cell boundary, yielding a thin cytoplasmic region surrounding the nucleus. Colour ratios computed from this small region are sensitive to boundary detection and lack the averaging effect of a larger sample of pixels. In contrast, CellPose traces the actual cell membrane, providing a fuller cytoplasm region where pixel-level noise is averaged out, producing more stable colour ratios that generalise across scanners.
+
 ```{python}
 #| label: tbl-external
-#| tbl-cap: "Classification performance on the Acevedo external validation set (6-class). XGBoost rows report mean ± SD across 5 seeds; fine-tuned models were not validated. Best values per metric are bolded."
+#| tbl-cap: "Classification performance on the Acevedo external validation set (6-class). XGBoost rows report macro F1 mean ± SD across 5 seeds; fine-tuned models were not validated. Best values per metric are bold."
 
 import json
 
@@ -960,6 +972,8 @@ plt.show()
 ```
 
 # Discussion
+
+DinoBloom-S's 
 
 ## Ethical Considerations
 
