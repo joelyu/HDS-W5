@@ -51,8 +51,7 @@ python -u scripts/03_xgboost_training.py \
     --results-dir results \
     --backbone dinobloom_s \
     --n-trials 5 \
-    --patience 5 \
-    --skip-gp
+    --patience 5
 
 echo ""
 echo "=== DEBUG DONE: $(date) ==="
