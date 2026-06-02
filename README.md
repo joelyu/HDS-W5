@@ -1,6 +1,8 @@
 # Comparing Feature Extraction Methods for Peripheral Blood Cell Classification
 
-MSt in Healthcare Data Science, Module 5 — University of Cambridge
+## Healthcare Data Science Module 5 Assignment
+
+To run just enough to render the Quarto report, go [here](#just-enough-to-render-quarto-document).
 
 ## Abstract
 
