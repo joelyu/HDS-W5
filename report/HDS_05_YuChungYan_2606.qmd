@@ -34,9 +34,9 @@ execute:
 |   |   |
 |---|---|
 |Name: Chung Yan|Surname: Yu|
-|Submission Date| DD -- MM -- YY |
-|Word Count: whole assignment including codes| |
-|Word Count: main body excluding abstract, references and supplementary materials| |
+|Submission Date| 02 -- 06 -- 26 |
+|Word Count: whole assignment including codes| 6,725 |
+|Word Count: main body excluding abstract, references and supplementary materials| 2,863 |
 
 #### Permission to share your assignment {.unnumbered .unlisted}
 
@@ -83,7 +83,7 @@ For each of the questions, do not spend too long answering -- keep it brief. For
 |---|---|
 | Which permitted use of generative AI are you acknowledging? | Code generation, informed feedback|
 | Which generative AI tool did you use (name and version)? | Claude Code Opus 4.6 |
-| What did you use the tool for? | Code generation, informed feedback, note curation and semantic search  |
+| What did you use the tool for? | Code generation, informed feedback, note curation and semantic search, reference curation |
 | How have you used or changed the generative AI's output? | Notes are kept in point form so I can write in my own voice. LLMs often defer to older package versions when newer versions are available. |
 
 {{< pagebreak >}}
@@ -492,7 +492,6 @@ plt.subplots_adjust(left=0.15, right=0.98, bottom=0.18, top=0.93, wspace=0.08)
 plt.show()
 ```
 
-To understand the feature space of the pretrained models, [@fig-umap] visualises the UMAP embeddings of their features. DinoBloom-S produced well-separated clusters for most classes, while EfficientNet-B0 showed general separation but with several classes still overlapping. ResNet-50's features lacked separation, appearing as an amorphous cloud that is again consistent with its lower macro F1. Further scrutinising where DinoBloom-S was attending, [@fig-attention] shows clear separation of the target cell in the center, the background, and neighbouring cells in the PCA of patch tokens. Even the nucleus and cytoplasm showed some degree of separation. The token norm heatmaps present a more complicated picture, with the attention often focused on neighbouring cells and the background rather than the target cell itself. However, there is still some level of separation between the nucleus of the target cell and the cytoplasm. This suggests that differentiating between the nucleus and cytoplasm could play a role in DinoBloom-S's performance. Yet, that the model attends to the background raises the possibility of learning scanner-specific artefacts.
 
 ```{python}
 #| label: fig-umap
@@ -564,6 +563,8 @@ fig.legend(
 plt.subplots_adjust(left=0.01, right=0.99, bottom=0.15, top=0.93, wspace=0.05)
 plt.show()
 ```
+
+To understand the feature space of the pretrained models, [@fig-umap] visualises the UMAP embeddings of their features. DinoBloom-S produced well-separated clusters for most classes, while EfficientNet-B0 showed general separation but with several classes still overlapping. ResNet-50's features lacked separation, appearing as an amorphous cloud that is again consistent with its lower macro F1. Further scrutinising where DinoBloom-S was attending, [@fig-attention] shows clear separation of the target cell in the center, the background, and neighbouring cells in the PCA of patch tokens. Even the nucleus and cytoplasm showed some degree of separation. The token norm heatmaps present a more complicated picture, with the attention often focused on neighbouring cells and the background rather than the target cell itself. However, there is still some level of separation between the nucleus of the target cell and the cytoplasm. This suggests that differentiating between the nucleus and cytoplasm could play a role in DinoBloom-S's performance. Yet, that the model attends to the background raises the possibility of learning scanner-specific artefacts.
 
 ```{python}
 #| label: fig-attention
@@ -693,7 +694,6 @@ plt.show()
 
 When validated with the Acevedo dataset [@acevedo2020dataset] (6-class), [@tbl-external] shows DinoBloom-S kept its edge over other models (XGBoost macro F1 = 0.919, linear probe macro F1 = 0.908), with higher absolute macro F1 than on KU-Optofil, while the rankings of the other models shifted compared to [@tbl-main]. These higher scores are not directly comparable, as the external set has fewer than half the classes. Digging deeper into per-class performance in [@fig-external-confusion], the erythroblast class saw a notable drop in recall for all models. This may reflect sensitivity of erythroblast morphology to scanner variations (Sysmex DI-60 vs CellaVision DM96). 
 
-The unexpected finding during external validation was the effect of cell segmentation on handcrafted features ([@tbl-external]). On KU-Optofil, CellPose and convex hull segmentation performed similarly (|Δ macro F1| < 0.001, bootstrap CI crosses 0), but on the Acevedo dataset CellPose outperformed convex hull by +0.16 macro F1 (0.788 vs 0.629), with a stronger diagonal in [@fig-segmentation] (a, b). SHAP analysis ([@fig-segmentation] c, d) shows that both approaches shared nucleus GLCM texture features in their top 10, as expected given identical nucleus segmentation. The difference is that convex hull leaned more on cytoplasm-to-cell colour ratios, while CellPose leaned more on nucleus-to-cell colour ratios and shape features such as solidity. This could be due to the convex hull of the nucleus underestimating the true cell boundary, yielding a thin cytoplasmic region surrounding the nucleus. Colour ratios computed from this small region are sensitive to boundary detection and lack the averaging effect of a larger sample of pixels. In contrast, CellPose traces the actual cell membrane, providing a fuller cytoplasm region where pixel-level noise is averaged out, producing more stable colour ratios that generalise across scanners.
 
 ```{python}
 #| label: tbl-external
@@ -823,6 +823,8 @@ cbar.ax.tick_params(labelsize=6)
 plt.subplots_adjust(left=0.15, right=0.90, bottom=0.22, top=0.92, wspace=0.08)
 plt.show()
 ```
+
+The unexpected finding during external validation was the effect of cell segmentation on handcrafted features ([@tbl-external]). On KU-Optofil, CellPose and convex hull segmentation performed similarly (|Δ macro F1| < 0.001, bootstrap CI crosses 0), but on the Acevedo dataset CellPose outperformed convex hull by +0.16 macro F1 (0.788 vs 0.629), with a stronger diagonal in [@fig-segmentation] (a, b). SHAP analysis ([@fig-segmentation] c, d) shows that both approaches shared nucleus GLCM texture features in their top 10, as expected given identical nucleus segmentation. The difference is that convex hull leaned more on cytoplasm-to-cell colour ratios, while CellPose leaned more on nucleus-to-cell colour ratios and shape features such as solidity. This could be due to the convex hull of the nucleus underestimating the true cell boundary, yielding a thin cytoplasmic region surrounding the nucleus. Colour ratios computed from this small region are sensitive to boundary detection and lack the averaging effect of a larger sample of pixels. In contrast, CellPose traces the actual cell membrane, providing a fuller cytoplasm region where pixel-level noise is averaged out, producing more stable colour ratios that generalise across scanners.
 
 ```{python}
 #| label: fig-segmentation
@@ -990,15 +992,15 @@ plt.show()
 
 # Discussion
 
-DinoBloom-S outperforming other ImageNet-pretrained models could be attributed to its in-domain pretraining with 380,000 white blood cell images [@koch2024dinobloom]. Through self-supervised learning, it captured haematological morphological features that ImageNet models lack. This improvement via in-domain training exceeded the gains reported by Glüge et al. [@gluge2024training], although the group used supervised learning with adjacent domains (cervical cells and histopathology) rather than self-supervised learning on haematological images. That linear probes were comparable classifiers to XGBoost when used with DinoBloom-S suggests that DinoBloom-S's pretraining produces representations where cell types are already well-separated, as substantiated by UMAP embeddings ([@fig-umap]). For deployment, this means classification requires only feature extraction with DinoBloom-S followed by logistic regression, both runnable on consumer hardware, bypassing GPU training. Inference, however, still benefits from GPU hardware acceleration, as does CellPose segmentation for the handcrafted features. As shown in the external validation ([@tbl-external]), CellPose was likely the difference for handcrafted feature generalisation, but it replaces a computationally near-zero-cost convex hull operation with a transformer inference step. This trade-off between computational frugality and performance is for practitioners to weigh against their available resources.
+DinoBloom-S outperforming other ImageNet-pretrained models could be attributed to its in-domain pretraining with 380,000 white blood cell images [@koch2024dinobloom]. Through self-supervised learning, it captured haematological morphological features that ImageNet models lack. This improvement via in-domain training exceeded the gains reported by Glüge et al. [@gluge2024training], although the group used supervised learning with adjacent domains (cervical cells and histopathology) rather than self-supervised learning on haematological images. That linear probes were comparable classifiers to XGBoost when used with DinoBloom-S suggests that DinoBloom-S's pretraining produces representations where cell types are already well-separated, as substantiated by UMAP embeddings ([@fig-umap]). For deployment, this means classification requires only feature extraction with DinoBloom-S followed by logistic regression, both runnable on consumer hardware, bypassing GPU training. Inference, however, still benefits from GPU hardware acceleration, as does CellPose segmentation for the handcrafted features. As shown in the external validation ([@tbl-external]), CellPose was likely the difference for handcrafted feature generalisation, but it replaces a computationally near-zero-cost convex hull operation with a transformer inference step. This creates a deployment conundrum: the convex hull handcrafted pipeline is lightweight enough to run on affordable processors such as a Raspberry Pi [@tavakoli2021new], but its poor generalisation ([@tbl-external]) could limit utility, while approaches that generalise better (DinoBloom-S, CellPose) require hardware that might not be available in the low-resource settings where they are needed most.
 
 Another trade-off is that of performance and interpretability. Handcrafted features are morphologically transparent, with SHAP ([@fig-segmentation] c, d) indicating which colour ratios and textures drive prediction. DinoBloom-S's extracted features are abstract, relying on attention maps to show where the model attends ([@fig-attention]) and in this case revealed that attention focused on areas other than the target cell. To allay concerns that the model is learning background noise rather than cell morphology, future work could segment the target cell with CellPose before the feature extraction step, to see if the model's classification power resides in the target cell.
 
 ## Limitations and Ethical Considerations
 
-Other limitations include training on a single centre (Koç University Hospital, Turkey) only, and the pipeline assumes pre-cropped single-cell images rather than whole blood smears. CellPose segmentation was only validated on a sample of images ([@fig-segmentation-comparison]) and by fallback rates (<0.1%), but exhaustive manual verification was not performed. The lack of demographic metadata (e.g. age, sex) also precluded bias auditing. 
+Blast identification is the most clinically consequential classification, as missed blasts can delay leukaemia diagnosis. DinoBloom-S with XGBoost blast recall was only 0.84, leaving a 16% miss rate that is insufficient for unsupervised deployment. Other limitations include training on a single centre (Koç University Hospital, Turkey) only, and the pipeline assumes pre-cropped single-cell images rather than whole blood smears. CellPose segmentation was only validated on a sample of images ([@fig-segmentation-comparison]) and by fallback rates (<0.1%), but exhaustive manual verification was not performed. The lack of demographic metadata (e.g. age, sex) also precluded bias auditing. 
 
-Both datasets originate from European/Mediterranean centres (Istanbul, Barcelona), yet the diagnostic gap is most acute in low- and middle-income countries [@fleming2021lancet], where such models would be needed most but their performance remains untested. Looking at existing commercial systems (e.g. CellaVision), they operate as screening aids requiring human review [@kratz2019digital]. Any deployment of these models should similarly augment rather than replace clinical judgement, with documented failures (e.g. myelocyte classification) communicated clearly to end users.
+Both datasets originate from European/Mediterranean centres (Istanbul, Barcelona), yet the diagnostic gap is most acute in low- and middle-income countries [@fleming2021lancet], where such models would be needed most but their performance remains untested. Looking at existing commercial systems (e.g. CellaVision), they operate as screening aids requiring human review [@kratz2019digital]. Any deployment of these models should similarly augment rather than replace clinical judgement, with documented failures (e.g. blast recall, myelocyte classification) communicated clearly to end users.
 
 # Conclusion
 
