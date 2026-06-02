@@ -23,3 +23,11 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Report artifacts
+report/~$*
+report/*.log
+report/*.tex
+report/*.quarto_ipynb*
+report/*_files/
+report/*.af
