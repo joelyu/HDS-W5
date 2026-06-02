@@ -98,6 +98,8 @@ For each of the questions, do not spend too long answering -- keep it brief. For
 
 **CONCLUSION** Domain-specific self-supervised pretraining (DinoBloom-S) paired with a lightweight classifier provides near fine-tuned performance at a fraction of the computational cost. Segmentation quality plays a role for handcrafted feature generalisability.
 
+Project repository: [github.com/joelyu/HDS-W5.git](https://github.com/joelyu/HDS-W5.git)
+
 # Introduction
 
 The classification of peripheral blood cells is a fundamental task in haematology, and the starting diagnostic step for 80% of haematological diseases [@acevedo2019recognition]. Manual classification methods that are prone to inter-observer variability [@fan2024microscope; @schelonka1995differentiation] have been gradually replaced by automated methods with the advent of classical and deep machine learning. One approach is radiomics inspired, relying on classical computer vision to engineer handcrafted features guided by haematological expertise [@tavakoli2021new], often requiring fewer computational resources. A second approach is leveraging pretrained models as backbones, including convolutional neural networks (CNNs) and vision transformers (ViTs), to extract learned features that can be fed into classifiers [@acevedo2019recognition], with this paradigm further expanding with the emergence of domain-specific foundational models such as DinoBloom [@koch2024dinobloom]. Finally, there is the end-to-end fine-tuning approach that optimises the entire model for blood cell classification [@asghar2024classification], a method requiring substantial computational resources from graphics processing units (GPUs). 
