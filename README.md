@@ -31,11 +31,15 @@ MSt in Healthcare Data Science, Module 5 — University of Cambridge
 
 ### Dependencies
 
-The project runs on **Python 3.12**, with `conda` and `pip` for building the environment.
+The project runs on **Python 3.12**, with `conda` or `pip` for building the environment.
 
 ```shell
 pip install -r requirements.txt         # any OS/architecture
+
+# OR
+
 conda env create -f environment.yml     # macOS arm64-based
+conda activate classileukotion
 ```
 
 Key packages are:
@@ -87,7 +91,7 @@ python scripts/02_feature_extraction.py
 One shell script to download all the data, train models, evaluate models, could take >1 day on consumer hardware.
 
 ```shell
-run_all.sh
+./run_all.sh
 ```
 
 #### Step by step breakdown
@@ -161,7 +165,7 @@ Fine-tuning (and, if preferred, the CPU jobs) can be offloaded to the CSD3 clust
 | `06_explainability` | UMAP, SHAP, attention maps | ampere (A100) | 1 GPU, 8 CPU, 32 GB |
 
 > [!NOTE]
-> Fine-tuning on ResNet-50 and EfficientNet-B0 took ~6-7 hours, ViT-S/16 and DinoBloom-S failed to complete in the maximum wall time of 12 hours on the HPC.
+> Running `03_fine_tuning.py` on ResNet-50 and EfficientNet-B0 took ~10 hours (~6-7 hours for tuning, ~3 hours for validation), ViT-S/16 and DinoBloom-S failed to complete in the maximum wall time of 12 hours on the HPC.
 
 The full pipeline can be submitted with dependency chaining via `bash hpc/submit_all.sh` (supports `--with-external`, `--with-finetune`, `--dry-run`).
 
@@ -170,41 +174,41 @@ The full pipeline can be submitted with dependency chaining via `bash hpc/submit
 ```
 HDS_W5_cyy36/
 ├── scripts/
-│   ├── config.py                  # Shared constants, class maps, data loaders
-│   ├── 00_download_data.py        # Download + extract KU-Optofil from Zenodo (md5-checked)
-│   ├── 00b_download_acevedo.py    # Download + extract Acevedo from Mendeley (sha256-checked)
-│   ├── 01_data_exploration.py     # EDA: class distribution, sample grid, split stats
-│   ├── 02_feature_extraction.py   # Frozen backbone features (ResNet-50, EfficientNet-B0, ViT-S/16, DinoBloom-S, DinoBloom-S multi-level)
-│   ├── 02b_handcrafted_features.py# Handcrafted features (Tavakoli-51 + extensions); --segmentation {convex_hull,dinobloom,cellpose}
-│   ├── 02c_dinobloom_cell_scores.py # DinoBloom patch-token cellness maps (for --segmentation dinobloom; exploratory, kept as reference only)
-│   ├── 02d_cellpose_masks.py      # CellPose whole-cell masks (for --segmentation cellpose; --acevedo-dir for external set)
-│   ├── 03_xgboost_training.py     # XGBoost + Optuna TPE tuning; --feature-set {all,tavakoli}, --five-class
-│   ├── 03b_linear_probe.py        # Linear probe (LogisticRegression); same flags
-│   ├── 04_fine_tune.py            # Optional: end-to-end fine-tuning (Optuna, AdamW, cosine LR, Hyperband pruning)
-│   ├── 05_evaluation.py           # Comparison tables (xlsx), per-class F1, confusion matrices, clinical focus, McNemar + bootstrap significance
-│   ├── 06_explainability.py       # UMAP, SHAP (handcrafted beeswarms with named features), DinoBloom attention
-│   ├── 07_external_validation.py  # Cross-dataset validation on Acevedo (deep + handcrafted, XGBoost + linear)
-│   ├── features.py                # Handcrafted feature computation (GLCM, morphology, extract_cell_features)
-│   ├── segmentation.py            # Nucleus + cell-boundary segmentation (multi-Otsu, convex hull, CellPose, DinoBloom)
-│   └── stats.py                   # McNemar's test, bootstrap CIs, Holm correction
-├── tests/                         # pytest unit tests 
-├── report/                        # Report files: .qmd, .bib, word and .pdf
-├── hpc/                           # CSD3 SLURM scripts (optional; see end of README)
-│   ├── setup_csd3.sh              # One-time environment + directory setup
-│   ├── submit_all.sh              # Submit full pipeline with dependency chaining
-│   ├── 00_debug_validate.slurm    # Quick debug run (DinoBloom only, 5 trials)
-│   ├── 01_feature_extraction.slurm# Frozen backbone features (GPU)
-│   ├── 01b_handcrafted_features.slurm # Handcrafted features: convex hull + CellPose (CPU)
-│   ├── 01c_cellpose_masks.slurm   # CellPose whole-cell masks (GPU); --acevedo for external set
-│   ├── 02_xgboost_training.slurm  # XGBoost + Optuna TPE tuning (CPU)
-│   ├── 02b_linear_probe.slurm     # Linear probe (CPU)
-│   ├── 03_fine_tuning.slurm       # End-to-end fine-tuning (GPU, per-backbone)
-│   ├── 04_external_validation.slurm # External validation on Acevedo (GPU)
-│   ├── 05_evaluation.slurm        # Comparison tables + statistical tests (CPU)
-│   └── 06_explainability.slurm    # UMAP, SHAP, attention maps (GPU)
-├── run_all.sh                     # Full local pipeline (--dry-run, --with-external, --with-finetune)
-├── requirements.txt               # Pip dependencies (OS/architecture agnostic)
-├── environment.yml                # Conda environment specification (for macOS-arm64)
+│   ├── config.py                       # Shared constants, class maps, data loaders
+│   ├── 00_download_data.py             # Download + extract KU-Optofil from Zenodo (md5-checked)
+│   ├── 00b_download_acevedo.py         # Download + extract Acevedo from Mendeley (sha256-checked)
+│   ├── 01_data_exploration.py          # EDA: class distribution, sample grid, split stats
+│   ├── 02_feature_extraction.py        # Frozen backbone features (ResNet-50, EfficientNet-B0, ViT-S/16, DinoBloom-S, DinoBloom-S multi-level)
+│   ├── 02b_handcrafted_features.py     # Handcrafted features (Tavakoli-51 + extensions); --segmentation {convex_hull,dinobloom,cellpose}; dinobloom option kept as reference only
+│   ├── 02c_dinobloom_cell_scores.py    # DinoBloom patch-token cellness maps (for --segmentation dinobloom; exploratory, kept as reference only)
+│   ├── 02d_cellpose_masks.py           # CellPose whole-cell masks (for --segmentation cellpose; --acevedo-dir for external set)
+│   ├── 03_xgboost_training.py          # XGBoost + Optuna TPE tuning; --feature-set {all,tavakoli}, --five-class
+│   ├── 03b_linear_probe.py             # Linear probe (LogisticRegression); same flags
+│   ├── 04_fine_tune.py                 # Optional: end-to-end fine-tuning (Optuna, AdamW, cosine LR, Hyperband pruning)
+│   ├── 05_evaluation.py                # Comparison tables (xlsx), per-class F1, confusion matrices, clinical focus, McNemar + bootstrap significance
+│   ├── 06_explainability.py            # UMAP, SHAP (handcrafted beeswarms with named features), DinoBloom attention
+│   ├── 07_external_validation.py       # Cross-dataset validation on Acevedo (deep + handcrafted, XGBoost + linear)
+│   ├── features.py                     # Handcrafted feature computation (GLCM, morphology, extract_cell_features)
+│   ├── segmentation.py                 # Nucleus + cell-boundary segmentation (multi-Otsu, convex hull, CellPose, DinoBloom)
+│   └── stats.py                        # McNemar's test, bootstrap CIs, Holm correction
+├── tests/                              # pytest unit tests 
+├── report/                             # Report files: .qmd, .bib, word and .pdf
+├── hpc/                                # CSD3 SLURM scripts (optional)
+│   ├── setup_csd3.sh                   # One-time environment + directory setup
+│   ├── submit_all.sh                   # Submit full pipeline with dependency chaining
+│   ├── 00_debug_validate.slurm         # Quick debug run (DinoBloom only, 5 trials)
+│   ├── 01_feature_extraction.slurm     # Frozen backbone features (GPU)
+│   ├── 01b_handcrafted_features.slurm  # Handcrafted features: convex hull + CellPose (CPU)
+│   ├── 01c_cellpose_masks.slurm        # CellPose whole-cell masks (GPU); --acevedo for external set
+│   ├── 02_xgboost_training.slurm       # XGBoost + Optuna TPE tuning (CPU)
+│   ├── 02b_linear_probe.slurm          # Linear probe (CPU)
+│   ├── 03_fine_tuning.slurm            # End-to-end fine-tuning (GPU, per-backbone)
+│   ├── 04_external_validation.slurm    # External validation on Acevedo (GPU)
+│   ├── 05_evaluation.slurm             # Comparison tables + statistical tests (CPU)
+│   └── 06_explainability.slurm         # UMAP, SHAP, attention maps (GPU)
+├── run_all.sh                          # Full local pipeline (--dry-run, --with-external, --with-finetune)
+├── requirements.txt                    # Pip dependencies (OS/architecture agnostic)
+├── environment.yml                     # Conda environment specification (for macOS-arm64)
 ├── .gitignore
 └── README.md
 ```
