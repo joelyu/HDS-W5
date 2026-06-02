@@ -194,6 +194,7 @@ HDS_W5_cyy36/
 │   ├── segmentation.py                 # Nucleus + cell-boundary segmentation (multi-Otsu, convex hull, CellPose, DinoBloom)
 │   └── stats.py                        # McNemar's test, bootstrap CIs, Holm correction
 ├── tests/                              # pytest unit tests 
+├── results/                            # JSON files for Quarto report rendering, *.npz files containing extracted features are not tracked and require 02_feature_extraction.py
 ├── report/                             # Report files: .qmd, .bib, word and .pdf
 ├── hpc/                                # CSD3 SLURM scripts (optional)
 │   ├── setup_csd3.sh                   # One-time environment + directory setup
